@@ -1,0 +1,46 @@
+# ── Build output ──────────────────────────────────────────────────────────────
+bin/
+obj/
+
+# ── .NET / Visual Studio ──────────────────────────────────────────────────────
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+*.rsuser
+
+# ── JetBrains Rider ───────────────────────────────────────────────────────────
+.idea/
+*.DotSettings.user
+
+# ── VS Code ───────────────────────────────────────────────────────────────────
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# ── NuGet ─────────────────────────────────────────────────────────────────────
+*.nupkg
+*.snupkg
+.nuget/
+packages/
+project.lock.json
+
+# ── Secrets / environment ────────────────────────────────────────────────────
+**/appsettings.Local.json
+**/appsettings.*.local.json
+**/.env
+**/.env.*
+!**/.env.example
+
+# ── Test results ──────────────────────────────────────────────────────────────
+TestResults/
+coverage/
+*.trx
+*.coverage
+*.coveragexml
+
+# ── OS artefacts ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Assist — Agentic Framework POC</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    /* ── Custom styles on top of Tailwind ── */
+    :root {
+      --sidebar-w: 280px;
+    }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; }
+
+    .pattern-card { transition: all 0.15s ease; }
+    .pattern-card:hover  { background: #1e293b; }
+    .pattern-card.active { background: #1e3a5f; border-left: 3px solid #3b82f6; }
+    /* Hybrid / recommended card gets amber active treatment */
+    #card-hybrid.active  { background: #3d2a05; border-left: 3px solid #f59e0b; }
+
+    .agent-bubble {
+      animation: slideIn 0.2s ease-out;
+      word-break: break-word;
+    }
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .typing-dot {
+      display: inline-block;
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      animation: pulse 1.2s ease-in-out infinite;
+    }
+    .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+    .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes pulse {
+      0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+      40%            { opacity: 1;   transform: scale(1.1); }
+    }
+
+    pre { white-space: pre-wrap; }
+    .prose p { margin-bottom: 0.5rem; }
+
+    /* Scrollbar styling */
+    ::-webkit-scrollbar       { width: 6px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+
+    #stream-area { scroll-behavior: smooth; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 flex h-screen overflow-hidden">
+
+  <!-- ════════════════════════════════════════════════════════════════════════
+       LEFT SIDEBAR — Pattern Selection
+  ════════════════════════════════════════════════════════════════════════════ -->
+  <aside class="w-[280px] flex-shrink-0 bg-slate-900 border-r border-slate-800 flex flex-col overflow-hidden">
+    <!-- Logo / title -->
+    <div class="p-5 border-b border-slate-800">
+      <div class="flex items-center gap-2 mb-1">
+        <span class="text-2xl">🏭</span>
+        <div>
+          <h1 class="text-sm font-bold text-white leading-tight">Assist Platform</h1>
+          <p class="text-xs text-slate-400">Agentic Framework POC</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Model indicator -->
+    <div class="px-4 py-2 border-b border-slate-800 flex items-center gap-2">
+      <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+      <span class="text-xs text-slate-400">Llama 3.2 via Ollama</span>
+    </div>
+
+    <!-- Pattern list -->
+    <div class="p-3 pb-1">
+      <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider px-2 mb-2">Orchestration Patterns</p>
+    </div>
+    <nav id="pattern-list" class="flex-1 overflow-y-auto px-3 pb-3 space-y-1">
+      <!-- Populated by JS -->
+      <div class="text-slate-500 text-xs px-2 py-4 text-center">Loading patterns...</div>
+    </nav>
+    <!-- Recommended separator — JS will inject the hybrid card here -->
+    <div id="recommended-area" class="px-3 pb-3"></div>
+
+    <!-- Footer -->
+    <div class="p-4 border-t border-slate-800 text-xs text-slate-600">
+      <p>Based on <a href="https://learn.microsoft.com/en-us/azure/architecture/ai-ml/guide/ai-agent-design-patterns" target="_blank" class="text-blue-500 hover:underline">Microsoft AI Agent Design Patterns</a></p>
+    </div>
+  </aside>
+
+  <!-- ════════════════════════════════════════════════════════════════════════
+       MAIN CONTENT AREA
+  ════════════════════════════════════════════════════════════════════════════ -->
+  <main class="flex-1 flex flex-col overflow-hidden">
+
+    <!-- Pattern Header (updates when a pattern is selected) -->
+    <div id="pattern-header" class="border-b border-slate-800 bg-slate-900 flex-shrink-0">
+      <!-- Default state -->
+      <div class="p-6 text-center text-slate-500">
+        <p class="text-lg">👈 Select a pattern from the sidebar to get started</p>
+      </div>
+    </div>
+
+    <!-- Prompt + Run -->
+    <div id="prompt-area" class="border-b border-slate-800 bg-slate-950 p-4 flex-shrink-0 hidden">
+      <div class="flex gap-3 items-start">
+        <div class="flex-1">
+          <label class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 block">Scenario Prompt</label>
+          <textarea
+            id="prompt-input"
+            rows="3"
+            class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-sm text-slate-100 placeholder-slate-500 resize-none focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30"
+            placeholder="Describe your incident or scenario..."
+          ></textarea>
+        </div>
+        <div class="flex flex-col gap-2 mt-6">
+          <button
+            id="run-btn"
+            onclick="runPattern()"
+            class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 disabled:bg-slate-700 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-colors flex items-center gap-2"
+          >
+            <span id="run-icon">▶</span>
+            <span id="run-label">Run Demo</span>
+          </button>
+          <button
+            id="clear-btn"
+            onclick="clearStream()"
+            class="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-400 text-sm rounded-lg transition-colors"
+          >
+            Clear
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Agent Stream Area -->
+    <div id="stream-area" class="flex-1 overflow-y-auto p-4 space-y-2">
+      <div id="stream-placeholder" class="flex items-center justify-center h-full text-slate-600">
+        <div class="text-center">
+          <p class="text-4xl mb-3">🤖</p>
+          <p class="text-lg font-medium mb-1">Agent activity will appear here</p>
+          <p class="text-sm">Select a pattern, review the scenario, then click Run Demo</p>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ════════════════════════════════════════════════════════════════════════
+       PATTERN INFO MODAL (Pros/Cons detail)
+  ════════════════════════════════════════════════════════════════════════════ -->
+  <div id="info-modal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-2xl w-full max-h-[80vh] overflow-y-auto p-6 shadow-2xl">
+      <div class="flex justify-between items-start mb-4">
+        <div>
+          <h2 id="modal-title" class="text-xl font-bold text-white"></h2>
+          <p id="modal-subtitle" class="text-slate-400 text-sm mt-1"></p>
+        </div>
+        <button onclick="closeModal()" class="text-slate-500 hover:text-white text-xl leading-none">✕</button>
+      </div>
+      <p id="modal-detail" class="text-slate-300 text-sm mb-5 leading-relaxed"></p>
+      <div class="grid grid-cols-2 gap-4 mb-5">
+        <div>
+          <h3 class="text-green-400 font-semibold text-sm mb-2 flex items-center gap-1">✅ Pros</h3>
+          <ul id="modal-pros" class="text-slate-300 text-sm space-y-1"></ul>
+        </div>
+        <div>
+          <h3 class="text-red-400 font-semibold text-sm mb-2 flex items-center gap-1">❌ Cons</h3>
+          <ul id="modal-cons" class="text-slate-300 text-sm space-y-1"></ul>
+        </div>
+      </div>
+      <div>
+        <h3 class="text-blue-400 font-semibold text-sm mb-2">🤖 Agents Involved</h3>
+        <div id="modal-agents" class="flex flex-wrap gap-2"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════════════════════════════════════
+       JAVASCRIPT
+  ════════════════════════════════════════════════════════════════════════════ -->
+  <script>
+    // ── State ─────────────────────────────────────────────────────────────────
+    let patterns       = [];
+    let selectedPattern = null;
+    let activeStream   = null;   // EventSource
+    let isRunning      = false;
+
+    // Agent colour registry (synced with C# agents)
+    const agentColours = {
+      default: '#64748b'
+    };
+
+    // ── Boot ──────────────────────────────────────────────────────────────────
+    window.addEventListener('DOMContentLoaded', async () => {
+      try {
+        const res = await fetch('/api/patterns');
+        patterns  = await res.json();
+        renderPatternList(patterns);
+      } catch (e) {
+        document.getElementById('pattern-list').innerHTML =
+          `<p class="text-red-400 text-xs px-2">⚠️ Could not load patterns. Is the server running?</p>`;
+      }
+    });
+
+    // ── Render sidebar ────────────────────────────────────────────────────────
+    function renderPatternList(patterns) {
+      const individual = patterns.filter(p => p.id !== 'hybrid');
+      const hybrid     = patterns.find(p => p.id === 'hybrid');
+
+      // ── Individual MS patterns ────────────────────────────────────────────
+      const nav = document.getElementById('pattern-list');
+      nav.innerHTML = individual.map(p => `
+        <div
+          id="card-${p.id}"
+          class="pattern-card rounded-lg px-3 py-3 cursor-pointer border border-transparent"
+          onclick="selectPattern('${p.id}')"
+        >
+          <div class="flex items-start gap-2">
+            <span class="text-xl mt-0.5">${p.icon}</span>
+            <div class="flex-1 min-w-0">
+              <div class="font-semibold text-sm text-white leading-tight">${p.name}</div>
+              <div class="text-xs text-slate-400 mt-0.5 leading-snug">${p.shortDescription}</div>
+            </div>
+          </div>
+        </div>
+      `).join('');
+
+      // ── Recommended hybrid — visually separated at the bottom ─────────────
+      if (hybrid) {
+        const area = document.getElementById('recommended-area');
+        area.innerHTML = `
+          <div class="border-t border-slate-700 pt-3 mt-1">
+            <p class="text-xs font-semibold text-amber-500 uppercase tracking-wider px-2 mb-2">
+              ⭐ Recommended for Assist
+            </p>
+            <div
+              id="card-hybrid"
+              class="pattern-card rounded-lg px-3 py-3 cursor-pointer border border-amber-500/30 bg-amber-950/20 hover:bg-amber-950/40"
+              onclick="selectPattern('hybrid')"
+            >
+              <div class="flex items-start gap-2">
+                <span class="text-xl mt-0.5">${hybrid.icon}</span>
+                <div class="flex-1 min-w-0">
+                  <div class="font-semibold text-sm text-amber-300 leading-tight">${hybrid.name}</div>
+                  <div class="text-xs text-slate-400 mt-0.5 leading-snug">${hybrid.shortDescription}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+    }
+
+    // ── Select a pattern ──────────────────────────────────────────────────────
+    function selectPattern(id) {
+      if (isRunning) return;  // don't switch mid-run
+
+      selectedPattern = patterns.find(p => p.id === id);
+      if (!selectedPattern) return;
+
+      // Update sidebar active state
+      document.querySelectorAll('.pattern-card').forEach(el => el.classList.remove('active'));
+      document.getElementById(`card-${id}`)?.classList.add('active');
+
+      // Update header
+      renderPatternHeader(selectedPattern);
+
+      // Show prompt area with default prompt
+      const promptArea = document.getElementById('prompt-area');
+      promptArea.classList.remove('hidden');
+      document.getElementById('prompt-input').value = selectedPattern.defaultPrompt;
+
+      // Clear the stream
+      clearStream();
+    }
+
+    function renderPatternHeader(p) {
+      const isHybrid = p.id === 'hybrid';
+      const headerBg = isHybrid ? 'bg-amber-950/20 border-b border-amber-800/30' : 'border-b border-slate-800 bg-slate-900';
+      const agentBadgeCls = isHybrid ? 'bg-amber-900/40 text-amber-400' : 'bg-slate-800 text-slate-400';
+      const recommendedBadge = isHybrid
+        ? `<span class="text-xs bg-amber-500/20 text-amber-400 border border-amber-500/40 px-2 py-0.5 rounded-full font-semibold">⭐ Recommended for Assist</span>`
+        : '';
+
+      document.getElementById('pattern-header').innerHTML = `
+        <div class="px-6 py-4 ${headerBg}">
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <div class="flex items-center gap-2 mb-1 flex-wrap">
+                <span class="text-2xl">${p.icon}</span>
+                <h2 class="text-xl font-bold ${isHybrid ? 'text-amber-300' : 'text-white'}">${p.name}</h2>
+                <span class="text-xs ${agentBadgeCls} px-2 py-0.5 rounded-full">
+                  up to ${p.agentsInvolved.length} agent${p.agentsInvolved.length !== 1 ? 's' : ''}
+                </span>
+                ${recommendedBadge}
+              </div>
+              <p class="text-slate-400 text-sm mt-1"><span class="font-medium text-slate-300">${p.scenarioTitle}</span> — ${p.scenarioDescription}</p>
+            </div>
+            <button
+              onclick="showModal('${p.id}')"
+              class="flex-shrink-0 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-lg transition-colors"
+            >
+              📋 Pros &amp; Cons
+            </button>
+          </div>
+          <!-- Quick pros/cons strip -->
+          <div class="mt-3 flex gap-4 flex-wrap">
+            <div class="text-xs text-emerald-400">
+              ✅ ${p.pros.slice(0, 2).join(' · ')}
+            </div>
+            <div class="text-xs text-red-400">
+              ❌ ${p.cons.slice(0, 2).join(' · ')}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    // ── Run Demo ──────────────────────────────────────────────────────────────
+    function runPattern() {
+      if (isRunning || !selectedPattern) return;
+
+      const prompt = document.getElementById('prompt-input').value.trim();
+      if (!prompt) {
+        alert('Please enter a scenario prompt.');
+        return;
+      }
+
+      clearStream();
+      setRunning(true);
+
+      const url = `/api/run?pattern=${encodeURIComponent(selectedPattern.id)}&prompt=${encodeURIComponent(prompt)}`;
+
+      activeStream = new EventSource(url);
+
+      activeStream.onmessage = (e) => {
+        if (e.data === '[DONE]') {
+          activeStream.close();
+          setRunning(false);
+          return;
+        }
+        try {
+          const evt = JSON.parse(e.data);
+          appendAgentEvent(evt);
+          autoScroll();
+        } catch (err) {
+          console.error('Parse error:', err, e.data);
+        }
+      };
+
+      activeStream.onerror = () => {
+        if (isRunning) {
+          appendSystemNote('⚠️ Stream disconnected or error. Check the server console.');
+          setRunning(false);
+        }
+        activeStream?.close();
+      };
+    }
+
+    function appendAgentEvent(evt) {
+      const area = document.getElementById('stream-area');
+
+      // Remove placeholder
+      document.getElementById('stream-placeholder')?.remove();
+
+      const { agentName, agentColour, content, eventType } = evt;
+
+      // Remove any existing "thinking" bubble for this agent when a real message arrives
+      if (eventType === 'AgentResponse') {
+        const thinkingEl = document.getElementById(`thinking-${sanitiseId(agentName)}`);
+        if (thinkingEl) {
+          // Check if there's an open-response bubble to append to
+          const existingBubble = document.getElementById(`bubble-${sanitiseId(agentName)}`);
+          if (existingBubble) {
+            const contentEl = existingBubble.querySelector('.bubble-content');
+            contentEl.textContent += content;
+            thinkingEl.remove();
+            return;
+          }
+          thinkingEl.remove();
+        }
+      }
+
+      if (eventType === 'AgentThinking') {
+        // Show a "thinking" indicator
+        const el = document.createElement('div');
+        el.id = `thinking-${sanitiseId(agentName)}`;
+        el.className = 'agent-bubble flex items-start gap-2 py-1';
+        el.innerHTML = `
+          <div class="w-2 h-2 rounded-full mt-3 flex-shrink-0" style="background:${agentColour}"></div>
+          <div class="flex-1">
+            <span class="text-xs font-semibold" style="color:${agentColour}">${agentName}</span>
+            <div class="mt-1 flex items-center gap-1 text-slate-500 text-xs">
+              <span class="typing-dot" style="background:${agentColour}"></span>
+              <span class="typing-dot" style="background:${agentColour}"></span>
+              <span class="typing-dot" style="background:${agentColour}"></span>
+              <span class="ml-1 italic">thinking...</span>
+            </div>
+          </div>
+        `;
+        area.appendChild(el);
+        return;
+      }
+
+      if (eventType === 'AgentResponse') {
+        // Create or append to existing bubble for this agent
+        let bubbleEl = document.getElementById(`bubble-${sanitiseId(agentName)}`);
+        if (!bubbleEl) {
+          bubbleEl = document.createElement('div');
+          bubbleEl.id = `bubble-${sanitiseId(agentName)}`;
+          bubbleEl.className = 'agent-bubble flex items-start gap-2 py-1';
+          bubbleEl.innerHTML = `
+            <div class="w-2 h-2 rounded-full mt-1.5 flex-shrink-0" style="background:${agentColour}"></div>
+            <div class="flex-1 min-w-0">
+              <span class="text-xs font-semibold" style="color:${agentColour}">${agentName}</span>
+              <div class="mt-1 text-sm text-slate-200 bg-slate-900 rounded-lg px-3 py-2 border border-slate-800 leading-relaxed">
+                <pre class="bubble-content font-sans"></pre>
+              </div>
+            </div>
+          `;
+          area.appendChild(bubbleEl);
+        }
+        bubbleEl.querySelector('.bubble-content').textContent += content;
+        return;
+      }
+
+      if (eventType === 'SystemNote') {
+        // Close any open bubble (next message is a new agent turn)
+        document.querySelectorAll('[id^="bubble-"]').forEach(el => el.removeAttribute('id'));
+        const el = document.createElement('div');
+        el.className = 'agent-bubble text-xs text-slate-500 italic py-1 px-1 flex items-center gap-2';
+        el.innerHTML = `<span class="text-slate-600">─────</span> ${escapeHtml(content)} <span class="text-slate-600">─────</span>`;
+        area.appendChild(el);
+        return;
+      }
+
+      if (eventType === 'AggregatedResult') {
+        document.querySelectorAll('[id^="bubble-"]').forEach(el => el.removeAttribute('id'));
+        const el = document.createElement('div');
+        el.className = 'agent-bubble my-3';
+        el.innerHTML = `
+          <div class="border border-violet-500/40 bg-violet-950/30 rounded-xl p-4">
+            <div class="flex items-center gap-2 mb-3">
+              <span class="text-lg">🎯</span>
+              <span class="font-bold text-violet-300 text-sm">Coordinator — Synthesised Result</span>
+            </div>
+            <pre class="text-sm text-slate-200 font-sans leading-relaxed whitespace-pre-wrap">${escapeHtml(content)}</pre>
+          </div>
+        `;
+        area.appendChild(el);
+        return;
+      }
+
+      if (eventType === 'Complete') {
+        document.querySelectorAll('[id^="bubble-"]').forEach(el => el.removeAttribute('id'));
+        const el = document.createElement('div');
+        el.className = 'agent-bubble mt-4';
+        el.innerHTML = `
+          <div class="border border-emerald-500/40 bg-emerald-950/30 rounded-xl p-3 flex items-center gap-3">
+            <span class="text-xl">✅</span>
+            <span class="text-emerald-300 text-sm font-medium">${escapeHtml(content)}</span>
+          </div>
+        `;
+        area.appendChild(el);
+        return;
+      }
+
+      if (eventType === 'Error') {
+        const el = document.createElement('div');
+        el.className = 'agent-bubble';
+        el.innerHTML = `
+          <div class="border border-red-500/40 bg-red-950/30 rounded-xl p-3 flex items-center gap-3">
+            <span>⚠️</span>
+            <span class="text-red-300 text-sm">${escapeHtml(content)}</span>
+          </div>
+        `;
+        area.appendChild(el);
+      }
+    }
+
+    function appendSystemNote(msg) {
+      const area = document.getElementById('stream-area');
+      document.getElementById('stream-placeholder')?.remove();
+      const el = document.createElement('div');
+      el.className = 'text-xs text-slate-500 italic py-1 px-1';
+      el.textContent = msg;
+      area.appendChild(el);
+      autoScroll();
+    }
+
+    // ── Modal ─────────────────────────────────────────────────────────────────
+    function showModal(id) {
+      const p = patterns.find(p => p.id === id);
+      if (!p) return;
+
+      document.getElementById('modal-title').textContent    = `${p.icon} ${p.name} Pattern`;
+      document.getElementById('modal-subtitle').textContent  = p.shortDescription;
+      document.getElementById('modal-detail').textContent   = p.detailedDescription;
+
+      document.getElementById('modal-pros').innerHTML =
+        p.pros.map(pro => `<li class="flex gap-1"><span class="text-emerald-400 mt-0.5">•</span>${escapeHtml(pro)}</li>`).join('');
+      document.getElementById('modal-cons').innerHTML =
+        p.cons.map(con => `<li class="flex gap-1"><span class="text-red-400 mt-0.5">•</span>${escapeHtml(con)}</li>`).join('');
+      document.getElementById('modal-agents').innerHTML =
+        p.agentsInvolved.map(a => `<span class="text-xs bg-slate-800 text-slate-300 px-2 py-1 rounded-full">${escapeHtml(a)}</span>`).join('');
+
+      document.getElementById('info-modal').classList.remove('hidden');
+    }
+
+    function closeModal() {
+      document.getElementById('info-modal').classList.add('hidden');
+    }
+
+    document.getElementById('info-modal').addEventListener('click', (e) => {
+      if (e.target === document.getElementById('info-modal')) closeModal();
+    });
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+    function clearStream() {
+      if (activeStream) { activeStream.close(); activeStream = null; }
+      const area = document.getElementById('stream-area');
+      area.innerHTML = `
+        <div id="stream-placeholder" class="flex items-center justify-center h-full text-slate-600">
+          <div class="text-center">
+            <p class="text-4xl mb-3">🤖</p>
+            <p class="text-lg font-medium mb-1">Agent activity will appear here</p>
+            <p class="text-sm">Click Run Demo to start the pattern</p>
+          </div>
+        </div>`;
+      if (isRunning) setRunning(false);
+    }
+
+    function setRunning(running) {
+      isRunning = running;
+      const btn   = document.getElementById('run-btn');
+      const icon  = document.getElementById('run-icon');
+      const label = document.getElementById('run-label');
+      btn.disabled = running;
+      if (running) {
+        icon.textContent  = '⏳';
+        label.textContent = 'Running...';
+      } else {
+        icon.textContent  = '▶';
+        label.textContent = 'Run Demo';
+      }
+    }
+
+    function autoScroll() {
+      const area = document.getElementById('stream-area');
+      area.scrollTop = area.scrollHeight;
+    }
+
+    function sanitiseId(name) {
+      return name.replace(/[^a-z0-9]/gi, '-').toLowerCase();
+    }
+
+    function escapeHtml(str) {
+      return str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+  </script>
+</body>
+</html>
