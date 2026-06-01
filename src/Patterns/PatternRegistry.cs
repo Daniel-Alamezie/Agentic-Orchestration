@@ -1,3 +1,4 @@
+using Core.Infrastructure;
 using Core.Interfaces;
 using Core.Models;
 using Microsoft.Extensions.DependencyInjection;
@@ -19,7 +20,7 @@ public sealed class PatternRegistry
 {
     private readonly Dictionary<string, IPatternRunner> _runners;
 
-    public PatternRegistry(Kernel kernel)
+    public PatternRegistry(Kernel kernel, ConversationStore store, IMcpFormClient mcpClient)
     {
         _runners = new Dictionary<string, IPatternRunner>(StringComparer.OrdinalIgnoreCase)
         {
@@ -29,8 +30,8 @@ public sealed class PatternRegistry
             ["groupchat"]   = new GroupChatPatternRunner(kernel),
             ["handoff"]     = new HandoffPatternRunner(kernel),
             ["magentic"]    = new MagenticPatternRunner(kernel),
-            // ── Recommended production pattern ───────────────────────────────────
-            ["hybrid"]      = new HybridPatternRunner(kernel),
+            // ── Recommended approach for the Assist platform ─────────────────────
+            ["hybrid"]      = new HybridPatternRunner(kernel, store, mcpClient),
         };
     }
 

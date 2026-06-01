@@ -50,8 +50,8 @@ public sealed class GroupChatPatternRunner : IPatternRunner
         ShortDescription:    "Roundtable — agents collaborate in a shared conversation",
         DetailedDescription: "Multiple agents participate in a managed conversation thread, building on each other's reasoning. A Chat Manager controls turn order and drives the group toward a consensus decision.",
         ScenarioTitle:       "Enforcement Action Decision Council",
-        ScenarioDescription: "Three specialist agents (Safety Manager, Legal, HR) debate whether to pursue an enforcement action. Each agent builds on the previous contributions. After 2 rounds, the Chat Manager synthesises a consensus decision.",
-        DefaultPrompt:       "A store manager has repeatedly ignored safety briefings about manual handling procedures. Three colleagues have sustained back injuries in the past month, all linked to improper lifting techniques during delivery unloads. Previous verbal warnings have been ignored. Should we pursue formal enforcement action?",
+        ScenarioDescription: "Three agents deliberate across multiple rounds. Watch how sequential turns produce a thorough but slow process — each agent waits for the previous to finish before contributing. For a time-critical incident, this deliberative pace would be unacceptable.",
+        DefaultPrompt:       "A section manager has been requiring their team to skip official rest breaks to meet productivity targets. Three colleagues have now submitted written complaints. The manager denies it was systematic. We need to decide whether this constitutes a formal health and safety breach and what action to take.",
         Pros:                ["Agents build on each other's reasoning", "Excellent for multi-perspective decision making", "Produces auditable deliberation trail", "Supports Human-in-the-Loop scenarios", "Natural fit for maker-checker validation loops"],
         Cons:                ["Slowest pattern — sequential turns", "Risk of circular debate without termination criteria", "Difficult to control with more than 3-4 agents", "Not suitable for time-sensitive scenarios"],
         AgentsInvolved:      ["Safety Manager Agent", "Legal Agent", "HR Agent", "Chat Manager (termination)"]
@@ -80,29 +80,24 @@ public sealed class GroupChatPatternRunner : IPatternRunner
         yield return AgentEvent.SystemNote("Shared conversation thread initialised. Beginning deliberation rounds...");
 
         // ── Deliberation rounds ───────────────────────────────────────────────────
+        // Panelists are ordered — each takes a turn every round. Chat Manager moderates
+        // between rounds and issues the final decision. Using an array avoids repeating
+        // the same Thinking → GetResponse → AddMessage → Response block per agent.
+        AssistAgent[] panelists = [safetyManager, legal, hr];
+
         for (int round = 1; round <= MaxRounds; round++)
         {
             yield return AgentEvent.SystemNote($"── Round {round}/{MaxRounds} ──────────────────────────");
 
-            // Safety Manager speaks first
-            yield return AgentEvent.Thinking(safetyManager.Name, safetyManager.Colour);
-            var safetyResponse = await safetyManager.GetResponseAsync(sharedThread, cancellationToken);
-            sharedThread.AddAssistantMessage($"[{safetyManager.Name}]: {safetyResponse}");
-            yield return AgentEvent.Response(safetyManager.Name, safetyManager.Colour, safetyResponse);
+            foreach (var panelist in panelists)
+            {
+                yield return AgentEvent.Thinking(panelist.Name, panelist.Colour);
+                var response = await panelist.GetResponseAsync(sharedThread, cancellationToken);
+                sharedThread.AddAssistantMessage($"[{panelist.Name}]: {response}");
+                yield return AgentEvent.Response(panelist.Name, panelist.Colour, response);
+            }
 
-            // Legal Agent responds
-            yield return AgentEvent.Thinking(legal.Name, legal.Colour);
-            var legalResponse = await legal.GetResponseAsync(sharedThread, cancellationToken);
-            sharedThread.AddAssistantMessage($"[{legal.Name}]: {legalResponse}");
-            yield return AgentEvent.Response(legal.Name, legal.Colour, legalResponse);
-
-            // HR Agent responds
-            yield return AgentEvent.Thinking(hr.Name, hr.Colour);
-            var hrResponse = await hr.GetResponseAsync(sharedThread, cancellationToken);
-            sharedThread.AddAssistantMessage($"[{hr.Name}]: {hrResponse}");
-            yield return AgentEvent.Response(hr.Name, hr.Colour, hrResponse);
-
-            // Check if Chat Manager sees consensus forming
+            // Check if Chat Manager sees consensus forming (not after the final round)
             if (round < MaxRounds)
             {
                 yield return AgentEvent.Thinking(chatManager.Name, chatManager.Colour);

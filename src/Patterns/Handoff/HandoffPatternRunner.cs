@@ -46,8 +46,8 @@ public sealed class HandoffPatternRunner : IPatternRunner
         ShortDescription:    "Triage & routing — the right specialist handles each domain",
         DetailedDescription: "A Triage Agent classifies the incident and routes it to the most appropriate specialist. Each specialist handles their domain and decides whether to hand off to another agent or close the chain. Only one agent is active at a time.",
         ScenarioTitle:       "Intelligent Incident Triage",
-        ScenarioDescription: "A mixed-domain incident is triaged and routed dynamically. The system determines which specialists are needed based on the content, invoking only those required — no wasted LLM calls.",
-        DefaultPrompt:       "I've just discovered that the fire exit in Building B is blocked by delivery pallets and cannot be opened. I also noticed that the CCTV camera covering that exit appears to have been turned to face the wall. The door lock mechanism also looks like it may have been tampered with.",
+        ScenarioDescription: "A fault spanning three domains routes through specialists one at a time. Watch how each domain requires a fresh handoff hop — with latency growing at every step. Notice that agents never work in parallel, even when they could.",
+        DefaultPrompt:       "A contractor doing electrical work has accidentally cut through a cable in the plant room. The store CCTV system is now partially offline, two emergency exit signs have gone dark, and the fire panel is showing a fault. The contractor is still on site.",
         Pros:                ["Only relevant specialists are invoked — efficient", "Natural escalation path mirroring real-world triage", "Right expert for each domain, deeply specialised", "Good when the required specialist isn't known upfront"],
         Cons:                ["Risk of infinite handoff loops — must cap hops", "Poor routing = significantly degraded experience", "Cannot handle tasks requiring simultaneous experts", "Latency grows linearly with each handoff"],
         AgentsInvolved:      ["Triage Agent", "Safety Specialist (if safety issues)", "Security Specialist (if security issues)", "Facilities Specialist (if facilities issues)"]
@@ -157,45 +157,48 @@ public sealed class HandoffPatternRunner : IPatternRunner
         yield return AgentEvent.Complete($"✅ Handoff chain complete — {handoffCount} specialist(s) invoked.");
     }
 
-    private static string? ExtractPrimaryAgent(string triageDecision)
+    /// <summary>
+    /// Finds the first line starting with <paramref name="prefix"/> and returns the
+    /// first token after the colon, lower-cased. Returns null if not found.
+    /// Used by both ExtractPrimaryAgent and ExtractHandoffTarget.
+    /// </summary>
+    private static string? ExtractLineValue(string text, string prefix)
     {
-        foreach (var line in triageDecision.Split('\n'))
+        foreach (var line in text.Split('\n'))
         {
-            if (!line.StartsWith("PRIMARY_AGENT:", StringComparison.OrdinalIgnoreCase)) continue;
-            var value = line.Split(':')[1].Trim().ToLowerInvariant().Split(' ')[0];
-            if (value is "safety" or "security" or "facilities") return value;
+            if (!line.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
+            var colonIdx = line.IndexOf(':');
+            if (colonIdx < 0) continue;
+            return line[(colonIdx + 1)..].Trim().ToLowerInvariant().Split(' ')[0];
         }
         return null;
     }
 
-    private static string? ExtractHandoffTarget(string agentResponse)
+    private static string? ExtractPrimaryAgent(string triageDecision)
     {
-        foreach (var line in agentResponse.Split('\n'))
-        {
-            if (!line.StartsWith("HANDOFF_TO:", StringComparison.OrdinalIgnoreCase)) continue;
-            var value = line.Split(':')[1].Trim().ToLowerInvariant().Split(' ')[0];
-            return value;
-        }
-        return null;
+        var value = ExtractLineValue(triageDecision, "PRIMARY_AGENT:");
+        return value is "safety" or "security" or "facilities" ? value : null;
     }
+
+    private static string? ExtractHandoffTarget(string agentResponse) =>
+        ExtractLineValue(agentResponse, "HANDOFF_TO:");
 
     private static string ExtractAnalysis(string agentResponse)
     {
-        var lines = agentResponse.Split('\n');
         var analysisLines = new List<string>();
-        var inAnalysis = false;
+        var inAnalysis    = false;
 
-        foreach (var line in lines)
+        foreach (var line in agentResponse.Split('\n'))
         {
             if (line.StartsWith("ANALYSIS:", StringComparison.OrdinalIgnoreCase))
             {
                 inAnalysis = true;
-                var rest = line.Substring("ANALYSIS:".Length).Trim();
+                var rest = line["ANALYSIS:".Length..].Trim();
                 if (!string.IsNullOrEmpty(rest)) analysisLines.Add(rest);
                 continue;
             }
-            if (inAnalysis && (line.StartsWith("HANDOFF_TO:", StringComparison.OrdinalIgnoreCase)
-                               || line.StartsWith("HANDOFF_REASON:", StringComparison.OrdinalIgnoreCase)))
+            if (inAnalysis && (line.StartsWith("HANDOFF_TO:",    StringComparison.OrdinalIgnoreCase)
+                            || line.StartsWith("HANDOFF_REASON:", StringComparison.OrdinalIgnoreCase)))
                 break;
             if (inAnalysis)
                 analysisLines.Add(line);
@@ -214,7 +217,7 @@ internal sealed class TriageAgent(Kernel kernel) : AssistAgent(kernel)
     public override string Role   => "Triage & Routing";
 
     protected override string SystemPrompt => """
-        You are an Incident Triage Agent for a multi-domain workplace management system.
+        You are an Incident Triage Agent for the Assist platform.
         Your only job is to classify an incident and route it to the correct specialist.
 
         Available specialists:

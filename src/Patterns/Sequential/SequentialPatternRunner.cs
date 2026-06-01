@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Text;
 using Agents;
 using Core.Infrastructure;
 using Core.Interfaces;
@@ -43,8 +44,8 @@ public sealed class SequentialPatternRunner : IPatternRunner
         ShortDescription:    "Linear pipeline — each agent builds on the last",
         DetailedDescription: "Agents execute in a fixed, predefined order. Each agent receives the output of the previous agent as its input, progressively refining and enriching the result.",
         ScenarioTitle:       "Incident Documentation Pipeline",
-        ScenarioDescription: "A colleague's incident description is passed through a 4-stage pipeline: extraction → safety assessment → compliance check → formal report generation.",
-        DefaultPrompt:       "A colleague slipped on a wet floor in the chilled aisle near the dairy section. They fell and hit their head on a shelf. They were conscious but complained of dizziness and a headache. The floor had been mopped 10 minutes earlier but no wet floor sign was placed. There were two witnesses.",
+        ScenarioDescription: "A routine near-miss runs through a fixed 4-stage pipeline. Watch how every stage must finish before the next begins — even for a simple, single-domain incident that only Safety needs to touch. Compare the total time to parallel patterns.",
+        DefaultPrompt:       "A colleague reported a near-miss slip on a wet floor near the bakery section. No injuries were sustained. The floor had been mopped and a wet floor sign was in place, but the sign had fallen over. Two colleagues witnessed the incident.",
         Pros:                ["Simple, predictable flow", "Each step enriches the previous output", "Easy to debug step-by-step", "Natural fit for document generation workflows"],
         Cons:                ["No parallelism — inherently slow", "Early-stage failures cascade forward", "All agents must complete even if some steps aren't needed"],
         AgentsInvolved:      ["Incident Capture Agent", "Safety Specialist", "Compliance Agent", "Report Generation Agent"]
@@ -62,36 +63,40 @@ public sealed class SequentialPatternRunner : IPatternRunner
         yield return AgentEvent.SystemNote("▶ Starting Sequential Pipeline — 4 stages");
 
         // ── Stage 1: Incident Capture ────────────────────────────────────────────
+        // Accumulate the full text from streaming events — avoids a second LLM call per stage.
         yield return AgentEvent.SystemNote("Stage 1/4 — Incident Capture Agent");
         var captureAgent = new IncidentCaptureAgent(_kernel);
-        var capturedDetails = string.Empty;
-
+        var capturedDetailsSb = new StringBuilder();
         await foreach (var evt in captureAgent.InvokeStreamingAsync(userPrompt, cancellationToken))
+        {
+            if (evt.EventType == AgentEventType.AgentResponse) capturedDetailsSb.Append(evt.Content);
             yield return evt;
-
-        capturedDetails = await captureAgent.GetResponseAsync(userPrompt, cancellationToken);
+        }
+        var capturedDetails = capturedDetailsSb.ToString();
 
         // ── Stage 2: Safety Assessment ───────────────────────────────────────────
         yield return AgentEvent.SystemNote("Stage 2/4 — Safety Specialist (using Stage 1 output as input)");
         var safetyAgent = new SafetySpecialistAgent(_kernel);
-        var safetyAssessment = string.Empty;
-
         var safetyInput = $"Structured incident details:\n{capturedDetails}\n\nProvide a safety assessment.";
+        var safetyAssessmentSb = new StringBuilder();
         await foreach (var evt in safetyAgent.InvokeStreamingAsync(safetyInput, cancellationToken))
+        {
+            if (evt.EventType == AgentEventType.AgentResponse) safetyAssessmentSb.Append(evt.Content);
             yield return evt;
-
-        safetyAssessment = await safetyAgent.GetResponseAsync(safetyInput, cancellationToken);
+        }
+        var safetyAssessment = safetyAssessmentSb.ToString();
 
         // ── Stage 3: Compliance Check ────────────────────────────────────────────
         yield return AgentEvent.SystemNote("Stage 3/4 — Compliance Agent (using Stage 2 output as input)");
         var complianceAgent = new ComplianceAgent(_kernel);
-        var complianceNotes = string.Empty;
-
         var complianceInput = $"Incident details:\n{capturedDetails}\n\nSafety assessment:\n{safetyAssessment}\n\nWhat are the regulatory reporting obligations?";
+        var complianceNotesSb = new StringBuilder();
         await foreach (var evt in complianceAgent.InvokeStreamingAsync(complianceInput, cancellationToken))
+        {
+            if (evt.EventType == AgentEventType.AgentResponse) complianceNotesSb.Append(evt.Content);
             yield return evt;
-
-        complianceNotes = await complianceAgent.GetResponseAsync(complianceInput, cancellationToken);
+        }
+        var complianceNotes = complianceNotesSb.ToString();
 
         // ── Stage 4: Report Generation ───────────────────────────────────────────
         yield return AgentEvent.SystemNote("Stage 4/4 — Report Generation Agent (synthesising all previous stages)");

@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Threading.Channels;
 using Agents;
 using Core.Interfaces;
@@ -45,8 +46,8 @@ public sealed class ConcurrentPatternRunner : IPatternRunner
         ShortDescription:    "Fan-out / Fan-in — all agents work in parallel",
         DetailedDescription: "All specialist agents receive the same input simultaneously and work independently. Their results are collected and synthesised by the Coordinator into a unified, prioritised response.",
         ScenarioTitle:       "Multi-Domain Incident Analysis",
-        ScenarioDescription: "A complex incident is simultaneously analysed by Safety, Security, and Facilities specialists. All three run in parallel. The Coordinator synthesises their findings into a single actionable plan.",
-        DefaultPrompt:       "There has been a fire alarm activation in Warehouse Block C. The sprinkler system has activated, causing flooding. An unauthorised person was seen in the area 30 minutes before the alarm. Two colleagues have minor burns. The loading dock doors are jammed open.",
+        ScenarioDescription: "A clear Facilities-only issue triggers ALL THREE specialists simultaneously. Watch Security produce a response despite having zero domain relevance here — every LLM call fires regardless of whether that agent has anything useful to contribute.",
+        DefaultPrompt:       "There is a growing pothole in the staff car park near the main entrance gate. Several colleagues have nearly tripped on it over the past two weeks and it is getting larger. No injuries have occurred yet.",
         Pros:                ["Fastest multi-domain analysis", "Independent specialist perspectives", "Adding more agents doesn't increase latency", "Natural fit for comprehensive incident assessment"],
         Cons:                ["Agents cannot build on each other's insights", "Requires conflict resolution for contradictory advice", "Resource-intensive — all LLM calls fire simultaneously", "Aggregation quality depends on the coordinator"],
         AgentsInvolved:      ["Safety Specialist", "Security Specialist", "Facilities Specialist", "Coordinator (aggregator)"]
@@ -77,28 +78,41 @@ public sealed class ConcurrentPatternRunner : IPatternRunner
         var securityResult  = string.Empty;
         var facilitiesResult = string.Empty;
 
-        // Launch all three agents concurrently, writing their events to the channel
+        // Launch all three agents concurrently, writing their events to the channel.
+        // Accumulate the full text from streaming events — avoids a second LLM call per agent.
         var producerTasks = new[]
         {
             Task.Run(async () =>
             {
-                safetyResult = await safety.GetResponseAsync(userPrompt, cancellationToken);
+                var sb = new StringBuilder();
                 await foreach (var evt in safety.InvokeStreamingAsync(userPrompt, cancellationToken))
+                {
+                    if (evt.EventType == AgentEventType.AgentResponse) sb.Append(evt.Content);
                     await channel.Writer.WriteAsync(evt, cancellationToken);
+                }
+                safetyResult = sb.ToString();
             }, cancellationToken),
 
             Task.Run(async () =>
             {
-                securityResult = await security.GetResponseAsync(userPrompt, cancellationToken);
+                var sb = new StringBuilder();
                 await foreach (var evt in security.InvokeStreamingAsync(userPrompt, cancellationToken))
+                {
+                    if (evt.EventType == AgentEventType.AgentResponse) sb.Append(evt.Content);
                     await channel.Writer.WriteAsync(evt, cancellationToken);
+                }
+                securityResult = sb.ToString();
             }, cancellationToken),
 
             Task.Run(async () =>
             {
-                facilitiesResult = await facilities.GetResponseAsync(userPrompt, cancellationToken);
+                var sb = new StringBuilder();
                 await foreach (var evt in facilities.InvokeStreamingAsync(userPrompt, cancellationToken))
+                {
+                    if (evt.EventType == AgentEventType.AgentResponse) sb.Append(evt.Content);
                     await channel.Writer.WriteAsync(evt, cancellationToken);
+                }
+                facilitiesResult = sb.ToString();
             }, cancellationToken)
         };
 

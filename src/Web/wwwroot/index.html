@@ -3,65 +3,132 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Assist — Agentic Framework POC</title>
+  <title>Sainsbury's Assist — Agentic Framework POC</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
-    /* ── Custom styles on top of Tailwind ── */
+    /* ── Brand tokens ── */
     :root {
-      --sidebar-w: 280px;
+      --brand:       #F06C00;
+      --brand-hover: #D95F00;
+      --brand-dark:  #2a1200;
     }
+
     body { font-family: 'Segoe UI', system-ui, sans-serif; }
 
+    /* ── Sidebar cards ── */
     .pattern-card { transition: all 0.15s ease; }
     .pattern-card:hover  { background: #1e293b; }
-    .pattern-card.active { background: #1e3a5f; border-left: 3px solid #3b82f6; }
-    /* Hybrid / recommended card gets amber active treatment */
-    #card-hybrid.active  { background: #3d2a05; border-left: 3px solid #f59e0b; }
+    .pattern-card.active { background: var(--brand-dark); border-left: 3px solid var(--brand); }
+    #card-hybrid.active  { background: #2d1500; border-left: 3px solid #FF8C1A; }
 
-    .agent-bubble {
-      animation: slideIn 0.2s ease-out;
-      word-break: break-word;
-    }
-    @keyframes slideIn {
-      from { opacity: 0; transform: translateY(6px); }
+    /* ── Chat bubble entrance animation ── */
+    .chat-msg { animation: slideUp 0.18s ease-out; }
+    @keyframes slideUp {
+      from { opacity: 0; transform: translateY(8px); }
       to   { opacity: 1; transform: translateY(0); }
     }
 
-    .typing-dot {
-      display: inline-block;
-      width: 6px; height: 6px;
-      border-radius: 50%;
-      animation: pulse 1.2s ease-in-out infinite;
+    /* ── Typing indicator dots ── */
+    .dot {
+      display: inline-block; width: 6px; height: 6px;
+      border-radius: 50%; animation: blink 1.4s ease infinite;
     }
-    .typing-dot:nth-child(2) { animation-delay: 0.2s; }
-    .typing-dot:nth-child(3) { animation-delay: 0.4s; }
-    @keyframes pulse {
-      0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
-      40%            { opacity: 1;   transform: scale(1.1); }
+    .dot:nth-child(2) { animation-delay: 0.22s; }
+    .dot:nth-child(3) { animation-delay: 0.44s; }
+    @keyframes blink {
+      0%,80%,100% { opacity: 0.2; transform: scale(0.8); }
+      40%          { opacity: 1;   transform: scale(1.1); }
     }
 
-    pre { white-space: pre-wrap; }
-    .prose p { margin-bottom: 0.5rem; }
+    /* ── Reasoning collapsible ── */
+    details.reasoning { cursor: pointer; }
+    details.reasoning > summary { list-style: none; }
+    details.reasoning > summary::-webkit-details-marker { display: none; }
+    details.reasoning[open] .chevron { transform: rotate(90deg); }
+    .chevron { transition: transform 0.15s ease; display: inline-block; font-size: 10px; }
 
-    /* Scrollbar styling */
-    ::-webkit-scrollbar       { width: 6px; }
-    ::-webkit-scrollbar-track { background: #0f172a; }
+    /* ── Scrollbar ── */
+    ::-webkit-scrollbar       { width: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+    #chat-area { scroll-behavior: smooth; }
 
-    #stream-area { scroll-behavior: smooth; }
+    /* ── Input focus ring ── */
+    .brand-focus:focus {
+      outline: none;
+      border-color: var(--brand) !important;
+      box-shadow: 0 0 0 3px rgba(240,108,0,0.15);
+    }
+
+    /* ── Streaming bubble text ── */
+    pre.bubble-text { white-space: pre-wrap; font-family: inherit; margin: 0; }
+
+    /* ── Panel tab bar ── */
+    .panel-tab {
+      position: relative;
+      padding: 10px 16px;
+      font-size: 13px;
+      font-weight: 600;
+      color: #94a3b8;
+      border-bottom: 2px solid transparent;
+      transition: color 0.15s, border-color 0.15s;
+      white-space: nowrap;
+    }
+    .panel-tab:hover { color: #e2e8f0; }
+    .panel-tab.active {
+      color: #FF8C1A;
+      border-bottom-color: #F06C00;
+    }
+
+    /* ── Forms tab slide-in ── */
+    @keyframes slideInFromRight {
+      from { opacity: 0; transform: translateX(16px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+    .tab-slide-in { animation: slideInFromRight 0.25s ease-out; }
+
+    /* ── AI pre-filled field tint ── */
+    .ai-field {
+      border-color: rgba(240,108,0,0.45) !important;
+      background:   rgba(240,108,0,0.06) !important;
+    }
+    .ai-field:focus {
+      outline: none;
+      border-color: rgba(240,108,0,0.7) !important;
+      box-shadow: 0 0 0 3px rgba(240,108,0,0.12);
+    }
+
+    /* ── Form field base ── */
+    .form-input {
+      width: 100%;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 8px 12px;
+      font-size: 13px;
+      color: #e2e8f0;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    .form-input:focus { outline: none; border-color: #475569; box-shadow: 0 0 0 2px rgba(71,85,105,0.4); }
+    select.form-input option { background: #1e293b; }
+    textarea.form-input { resize: vertical; min-height: 72px; }
   </style>
 </head>
 <body class="bg-slate-950 text-slate-100 flex h-screen overflow-hidden">
 
   <!-- ════════════════════════════════════════════════════════════════════════
-       LEFT SIDEBAR — Pattern Selection
+       LEFT SIDEBAR
   ════════════════════════════════════════════════════════════════════════════ -->
   <aside class="w-[280px] flex-shrink-0 bg-slate-900 border-r border-slate-800 flex flex-col overflow-hidden">
-    <!-- Logo / title -->
+
+    <!-- Logo -->
     <div class="p-5 border-b border-slate-800">
-      <div class="flex items-center gap-2 mb-1">
-        <span class="text-2xl">🏭</span>
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0" style="background:#F06C00">
+          <span class="text-white font-black text-xl leading-none">S</span>
+        </div>
         <div>
+          <p class="text-[10px] font-semibold uppercase tracking-widest" style="color:#F06C00">Sainsbury's</p>
           <h1 class="text-sm font-bold text-white leading-tight">Assist Platform</h1>
           <p class="text-xs text-slate-400">Agentic Framework POC</p>
         </div>
@@ -70,7 +137,7 @@
 
     <!-- Model indicator -->
     <div class="px-4 py-2 border-b border-slate-800 flex items-center gap-2">
-      <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+      <span class="w-2 h-2 rounded-full animate-pulse" style="background:#F06C00"></span>
       <span class="text-xs text-slate-400">Llama 3.2 via Ollama</span>
     </div>
 
@@ -79,100 +146,98 @@
       <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider px-2 mb-2">Orchestration Patterns</p>
     </div>
     <nav id="pattern-list" class="flex-1 overflow-y-auto px-3 pb-3 space-y-1">
-      <!-- Populated by JS -->
       <div class="text-slate-500 text-xs px-2 py-4 text-center">Loading patterns...</div>
     </nav>
-    <!-- Recommended separator — JS will inject the hybrid card here -->
     <div id="recommended-area" class="px-3 pb-3"></div>
 
     <!-- Footer -->
     <div class="p-4 border-t border-slate-800 text-xs text-slate-600">
-      <p>Based on <a href="https://learn.microsoft.com/en-us/azure/architecture/ai-ml/guide/ai-agent-design-patterns" target="_blank" class="text-blue-500 hover:underline">Microsoft AI Agent Design Patterns</a></p>
+      <p>Based on <a href="https://learn.microsoft.com/en-us/azure/architecture/ai-ml/guide/ai-agent-design-patterns"
+         target="_blank" class="hover:underline" style="color:#F06C00">Microsoft AI Agent Design Patterns</a></p>
     </div>
   </aside>
 
   <!-- ════════════════════════════════════════════════════════════════════════
-       MAIN CONTENT AREA
+       MAIN — header + tabs + content panels + input
   ════════════════════════════════════════════════════════════════════════════ -->
   <main class="flex-1 flex flex-col overflow-hidden">
 
-    <!-- Pattern Header (updates when a pattern is selected) -->
-    <div id="pattern-header" class="border-b border-slate-800 bg-slate-900 flex-shrink-0">
-      <!-- Default state -->
+    <!-- Pattern header (always visible, swapped by JS) -->
+    <div id="pattern-header" class="flex-shrink-0 border-b border-slate-800 bg-slate-900">
       <div class="p-6 text-center text-slate-500">
         <p class="text-lg">👈 Select a pattern from the sidebar to get started</p>
       </div>
     </div>
 
-    <!-- Prompt + Run -->
-    <div id="prompt-area" class="border-b border-slate-800 bg-slate-950 p-4 flex-shrink-0 hidden">
-      <div class="flex gap-3 items-start">
-        <div class="flex-1">
-          <label class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2 block">Scenario Prompt</label>
-          <textarea
-            id="prompt-input"
-            rows="3"
-            class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-sm text-slate-100 placeholder-slate-500 resize-none focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/30"
-            placeholder="Describe your incident or scenario..."
-          ></textarea>
-        </div>
-        <div class="flex flex-col gap-2 mt-6">
-          <button
-            id="run-btn"
-            onclick="runPattern()"
-            class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 active:bg-blue-700 disabled:bg-slate-700 disabled:cursor-not-allowed text-white text-sm font-semibold rounded-lg transition-colors flex items-center gap-2"
-          >
-            <span id="run-icon">▶</span>
-            <span id="run-label">Run Demo</span>
-          </button>
-          <button
-            id="clear-btn"
-            onclick="clearStream()"
-            class="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-400 text-sm rounded-lg transition-colors"
-          >
-            Clear
-          </button>
+    <!-- Panel tab bar (hidden until hybrid selected) -->
+    <div id="tab-bar" class="hidden flex-shrink-0 bg-slate-900 border-b border-slate-800">
+      <div class="flex items-end px-4 gap-0.5">
+        <button id="tab-conversation" class="panel-tab active" onclick="switchTab('conversation')">
+          💬 Conversation
+        </button>
+        <button id="tab-forms" class="panel-tab" onclick="switchTab('forms')"
+                style="opacity:0.35;cursor:not-allowed" disabled>
+          📋 Forms
+          <span id="forms-badge"
+                class="hidden ml-1.5 min-w-[18px] h-[18px] px-1 rounded-full text-[10px] font-bold
+                       text-white inline-flex items-center justify-center"
+                style="background:#F06C00">0</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- ── Conversation panel ── -->
+    <div id="chat-area" class="flex-1 overflow-y-auto px-6 py-5 space-y-3">
+      <!-- Placeholder — removed on first event -->
+      <div id="chat-placeholder" class="flex items-center justify-center h-full text-slate-600 pointer-events-none select-none">
+        <div class="text-center">
+          <div class="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4"
+               style="background:rgba(240,108,0,0.1)">
+            <span class="text-3xl font-black" style="color:#F06C00">S</span>
+          </div>
+          <p class="text-lg font-medium mb-1">Agent activity will appear here</p>
+          <p class="text-sm">Select a pattern and run the demo to see the agents in action</p>
         </div>
       </div>
     </div>
 
-    <!-- Agent Stream Area -->
-    <div id="stream-area" class="flex-1 overflow-y-auto p-4 space-y-2">
-      <div id="stream-placeholder" class="flex items-center justify-center h-full text-slate-600">
-        <div class="text-center">
-          <p class="text-4xl mb-3">🤖</p>
-          <p class="text-lg font-medium mb-1">Agent activity will appear here</p>
-          <p class="text-sm">Select a pattern, review the scenario, then click Run Demo</p>
-        </div>
-      </div>
+    <!-- ── Forms panel (hidden by default) ── -->
+    <div id="forms-area" class="hidden flex-1 flex flex-col overflow-hidden bg-slate-950">
+      <!-- Rendered by renderFormsView() -->
     </div>
+
+    <!-- ── Bottom input bar (hidden until pattern selected) ── -->
+    <div id="input-bar" class="flex-shrink-0 border-t border-slate-800 bg-slate-900 hidden">
+    </div>
+
   </main>
 
   <!-- ════════════════════════════════════════════════════════════════════════
-       PATTERN INFO MODAL (Pros/Cons detail)
+       PROS/CONS MODAL
   ════════════════════════════════════════════════════════════════════════════ -->
-  <div id="info-modal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+  <div id="info-modal"
+       class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
     <div class="bg-slate-900 border border-slate-700 rounded-2xl max-w-2xl w-full max-h-[80vh] overflow-y-auto p-6 shadow-2xl">
       <div class="flex justify-between items-start mb-4">
         <div>
-          <h2 id="modal-title" class="text-xl font-bold text-white"></h2>
-          <p id="modal-subtitle" class="text-slate-400 text-sm mt-1"></p>
+          <h2 id="modal-title"    class="text-xl font-bold text-white"></h2>
+          <p  id="modal-subtitle" class="text-slate-400 text-sm mt-1"></p>
         </div>
-        <button onclick="closeModal()" class="text-slate-500 hover:text-white text-xl leading-none">✕</button>
+        <button onclick="closeModal()" class="text-slate-500 hover:text-white text-xl leading-none ml-4">✕</button>
       </div>
       <p id="modal-detail" class="text-slate-300 text-sm mb-5 leading-relaxed"></p>
       <div class="grid grid-cols-2 gap-4 mb-5">
         <div>
-          <h3 class="text-green-400 font-semibold text-sm mb-2 flex items-center gap-1">✅ Pros</h3>
+          <h3 class="text-green-400 font-semibold text-sm mb-2">✅ Pros</h3>
           <ul id="modal-pros" class="text-slate-300 text-sm space-y-1"></ul>
         </div>
         <div>
-          <h3 class="text-red-400 font-semibold text-sm mb-2 flex items-center gap-1">❌ Cons</h3>
+          <h3 class="text-red-400 font-semibold text-sm mb-2">❌ Cons</h3>
           <ul id="modal-cons" class="text-slate-300 text-sm space-y-1"></ul>
         </div>
       </div>
       <div>
-        <h3 class="text-blue-400 font-semibold text-sm mb-2">🤖 Agents Involved</h3>
+        <h3 class="font-semibold text-sm mb-2" style="color:#F06C00">🤖 Agents Involved</h3>
         <div id="modal-agents" class="flex flex-wrap gap-2"></div>
       </div>
     </div>
@@ -182,16 +247,34 @@
        JAVASCRIPT
   ════════════════════════════════════════════════════════════════════════════ -->
   <script>
-    // ── State ─────────────────────────────────────────────────────────────────
-    let patterns       = [];
+    // ── Global state ──────────────────────────────────────────────────────────
+    let patterns        = [];
     let selectedPattern = null;
-    let activeStream   = null;   // EventSource
-    let isRunning      = false;
+    let activeStream    = null;
+    let isRunning       = false;
+    let pendingConvId   = null;
 
-    // Agent colour registry (synced with C# agents)
-    const agentColours = {
-      default: '#64748b'
+    // Forms state
+    let filledForms      = [];
+    let activePanelTab   = 'conversation';
+    let currentFormIndex = 0;
+    let currentPageIndex = 0;
+
+    // Hybrid agent-panel state — tracks each specialist's progress
+    // { [agentName]: { colour: string, status: 'working' | 'done' } }
+    let agentPanelState  = {};
+
+    // Domain → specialist name map (for marking done when FormFilled arrives)
+    const DOMAIN_AGENT = {
+      safety:     'Safety Specialist',
+      security:   'Security Specialist',
+      facilities: 'Facilities Specialist'
     };
+
+    // ── Session chat cache — persists each pattern's thread for the demo ──────
+    // { [patternId]: { html, formsHtml, filledForms, activePanelTab, currentFormIndex,
+    //                  currentPageIndex, prompt, inputMode } }
+    const chatCache = {};
 
     // ── Boot ──────────────────────────────────────────────────────────────────
     window.addEventListener('DOMContentLoaded', async () => {
@@ -199,25 +282,21 @@
         const res = await fetch('/api/patterns');
         patterns  = await res.json();
         renderPatternList(patterns);
-      } catch (e) {
+      } catch {
         document.getElementById('pattern-list').innerHTML =
-          `<p class="text-red-400 text-xs px-2">⚠️ Could not load patterns. Is the server running?</p>`;
+          `<p class="text-red-400 text-xs px-2 py-4">⚠️ Could not load patterns. Is the server running?</p>`;
       }
     });
 
-    // ── Render sidebar ────────────────────────────────────────────────────────
-    function renderPatternList(patterns) {
-      const individual = patterns.filter(p => p.id !== 'hybrid');
-      const hybrid     = patterns.find(p => p.id === 'hybrid');
+    // ── Sidebar ───────────────────────────────────────────────────────────────
+    function renderPatternList(all) {
+      const individual = all.filter(p => p.id !== 'hybrid');
+      const hybrid     = all.find(p => p.id === 'hybrid');
 
-      // ── Individual MS patterns ────────────────────────────────────────────
-      const nav = document.getElementById('pattern-list');
-      nav.innerHTML = individual.map(p => `
-        <div
-          id="card-${p.id}"
-          class="pattern-card rounded-lg px-3 py-3 cursor-pointer border border-transparent"
-          onclick="selectPattern('${p.id}')"
-        >
+      document.getElementById('pattern-list').innerHTML = individual.map(p => `
+        <div id="card-${p.id}"
+             class="pattern-card rounded-lg px-3 py-3 cursor-pointer border border-transparent"
+             onclick="selectPattern('${p.id}')">
           <div class="flex items-start gap-2">
             <span class="text-xl mt-0.5">${p.icon}</span>
             <div class="flex-1 min-w-0">
@@ -225,345 +304,1074 @@
               <div class="text-xs text-slate-400 mt-0.5 leading-snug">${p.shortDescription}</div>
             </div>
           </div>
-        </div>
-      `).join('');
+        </div>`).join('');
 
-      // ── Recommended hybrid — visually separated at the bottom ─────────────
       if (hybrid) {
-        const area = document.getElementById('recommended-area');
-        area.innerHTML = `
+        document.getElementById('recommended-area').innerHTML = `
           <div class="border-t border-slate-700 pt-3 mt-1">
-            <p class="text-xs font-semibold text-amber-500 uppercase tracking-wider px-2 mb-2">
+            <p class="text-xs font-semibold uppercase tracking-wider px-2 mb-2" style="color:#FF8C1A">
               ⭐ Recommended for Assist
             </p>
-            <div
-              id="card-hybrid"
-              class="pattern-card rounded-lg px-3 py-3 cursor-pointer border border-amber-500/30 bg-amber-950/20 hover:bg-amber-950/40"
-              onclick="selectPattern('hybrid')"
-            >
+            <div id="card-hybrid"
+                 class="pattern-card rounded-lg px-3 py-3 cursor-pointer border"
+                 style="border-color:rgba(240,108,0,0.3);background:rgba(42,18,0,0.3)"
+                 onmouseover="if(!this.classList.contains('active'))this.style.background='rgba(42,18,0,0.5)'"
+                 onmouseout ="if(!this.classList.contains('active'))this.style.background='rgba(42,18,0,0.3)'"
+                 onclick="selectPattern('hybrid')">
               <div class="flex items-start gap-2">
                 <span class="text-xl mt-0.5">${hybrid.icon}</span>
                 <div class="flex-1 min-w-0">
-                  <div class="font-semibold text-sm text-amber-300 leading-tight">${hybrid.name}</div>
+                  <div class="font-semibold text-sm leading-tight" style="color:#FFA040">${hybrid.name}</div>
                   <div class="text-xs text-slate-400 mt-0.5 leading-snug">${hybrid.shortDescription}</div>
                 </div>
               </div>
             </div>
-          </div>
-        `;
+          </div>`;
       }
     }
 
-    // ── Select a pattern ──────────────────────────────────────────────────────
+    // ── Select pattern ────────────────────────────────────────────────────────
     function selectPattern(id) {
-      if (isRunning) return;  // don't switch mid-run
+      if (isRunning) return;
+
+      // Save current pattern state before switching
+      if (selectedPattern) {
+        chatCache[selectedPattern.id] = {
+          html:             document.getElementById('chat-area').innerHTML,
+          formsHtml:        document.getElementById('forms-area').innerHTML,
+          filledForms:      [...filledForms],
+          activePanelTab:   activePanelTab,
+          currentFormIndex: currentFormIndex,
+          currentPageIndex: currentPageIndex,
+          prompt:           selectedPattern._lastPrompt,
+          inputMode:        selectedPattern._inputMode || 'idle',
+        };
+      }
 
       selectedPattern = patterns.find(p => p.id === id);
       if (!selectedPattern) return;
 
-      // Update sidebar active state
       document.querySelectorAll('.pattern-card').forEach(el => el.classList.remove('active'));
       document.getElementById(`card-${id}`)?.classList.add('active');
 
-      // Update header
       renderPatternHeader(selectedPattern);
 
-      // Show prompt area with default prompt
-      const promptArea = document.getElementById('prompt-area');
-      promptArea.classList.remove('hidden');
-      document.getElementById('prompt-input').value = selectedPattern.defaultPrompt;
+      // Show tab bar only for hybrid
+      const tabBar = document.getElementById('tab-bar');
+      if (id === 'hybrid') {
+        tabBar.classList.remove('hidden');
+      } else {
+        tabBar.classList.add('hidden');
+        // Hide forms panel, ensure chat is visible
+        switchTab('conversation', false);
+      }
 
-      // Clear the stream
-      clearStream();
+      // Restore from cache if we've been here before
+      const cached = chatCache[id];
+      if (cached) {
+        document.getElementById('chat-area').innerHTML = cached.html;
+        document.getElementById('forms-area').innerHTML = cached.formsHtml || '';
+        filledForms      = cached.filledForms      || [];
+        activePanelTab   = cached.activePanelTab   || 'conversation';
+        currentFormIndex = cached.currentFormIndex || 0;
+        currentPageIndex = cached.currentPageIndex || 0;
+        selectedPattern._lastPrompt = cached.prompt;
+        selectedPattern._inputMode  = cached.inputMode;
+
+        // Restore badge and enable forms tab if forms were present
+        if (filledForms.length > 0 && id === 'hybrid') {
+          const tab = document.getElementById('tab-forms');
+          if (tab) { tab.disabled = false; tab.style.opacity = '1'; tab.style.cursor = 'pointer'; }
+          const badge = document.getElementById('forms-badge');
+          if (badge) { badge.textContent = filledForms.length; badge.classList.remove('hidden'); }
+        }
+
+        // Restore active tab
+        switchTab(activePanelTab, false);
+        renderInputBar(cached.inputMode);
+      } else {
+        filledForms      = [];
+        activePanelTab   = 'conversation';
+        currentFormIndex = 0;
+        currentPageIndex = 0;
+        clearChat();
+      }
+
+      document.getElementById('input-bar').classList.remove('hidden');
     }
 
+    // ── Panel tab switching ───────────────────────────────────────────────────
+    function switchTab(tab, animate = true) {
+      activePanelTab = tab;
+
+      const chatArea  = document.getElementById('chat-area');
+      const formsArea = document.getElementById('forms-area');
+      const tabConv   = document.getElementById('tab-conversation');
+      const tabForms  = document.getElementById('tab-forms');
+
+      if (tab === 'conversation') {
+        chatArea.classList.remove('hidden');
+        formsArea.classList.add('hidden');
+        tabConv?.classList.add('active');
+        tabForms?.classList.remove('active');
+      } else {
+        chatArea.classList.add('hidden');
+        formsArea.classList.remove('hidden');
+        tabForms?.classList.add('active');
+        tabConv?.classList.remove('active');
+        renderFormsView();
+      }
+    }
+
+    function revealFormsTab() {
+      const tab = document.getElementById('tab-forms');
+      if (!tab || !tab.disabled) return;   // already enabled
+      tab.disabled = false;
+      tab.style.opacity = '1';
+      tab.style.cursor  = 'pointer';
+      tab.classList.add('tab-slide-in');
+      setTimeout(() => tab.classList.remove('tab-slide-in'), 400);
+    }
+
+    // ── Pattern header ────────────────────────────────────────────────────────
     function renderPatternHeader(p) {
       const isHybrid = p.id === 'hybrid';
-      const headerBg = isHybrid ? 'bg-amber-950/20 border-b border-amber-800/30' : 'border-b border-slate-800 bg-slate-900';
-      const agentBadgeCls = isHybrid ? 'bg-amber-900/40 text-amber-400' : 'bg-slate-800 text-slate-400';
-      const recommendedBadge = isHybrid
-        ? `<span class="text-xs bg-amber-500/20 text-amber-400 border border-amber-500/40 px-2 py-0.5 rounded-full font-semibold">⭐ Recommended for Assist</span>`
-        : '';
+      const recommended = isHybrid
+        ? `<span class="text-xs px-2 py-0.5 rounded-full font-semibold"
+                style="background:rgba(240,108,0,0.15);color:#FF8C1A;border:1px solid rgba(240,108,0,0.35)">
+             ⭐ Recommended for Assist
+           </span>` : '';
 
       document.getElementById('pattern-header').innerHTML = `
-        <div class="px-6 py-4 ${headerBg}">
+        <div class="px-6 py-4 ${isHybrid ? '' : 'bg-slate-900'}"
+             style="${isHybrid ? 'background:rgba(42,18,0,0.25);border-bottom:1px solid rgba(240,108,0,0.2)' : ''}">
           <div class="flex items-start justify-between gap-4">
-            <div>
+            <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2 mb-1 flex-wrap">
-                <span class="text-2xl">${p.icon}</span>
-                <h2 class="text-xl font-bold ${isHybrid ? 'text-amber-300' : 'text-white'}">${p.name}</h2>
-                <span class="text-xs ${agentBadgeCls} px-2 py-0.5 rounded-full">
-                  up to ${p.agentsInvolved.length} agent${p.agentsInvolved.length !== 1 ? 's' : ''}
+                <span class="text-xl">${p.icon}</span>
+                <h2 class="text-lg font-bold" style="${isHybrid ? 'color:#FFA040' : 'color:white'}">${p.name}</h2>
+                <span class="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-400">
+                  up to ${p.agentsInvolved.length} agents
                 </span>
-                ${recommendedBadge}
+                ${recommended}
               </div>
-              <p class="text-slate-400 text-sm mt-1"><span class="font-medium text-slate-300">${p.scenarioTitle}</span> — ${p.scenarioDescription}</p>
+              <p class="text-slate-400 text-sm">
+                <span class="font-medium text-slate-300">${p.scenarioTitle}</span> — ${p.scenarioDescription}
+              </p>
+              <div class="mt-2 flex gap-4 flex-wrap">
+                <span class="text-xs text-emerald-400">✅ ${p.pros.slice(0,2).join(' · ')}</span>
+                <span class="text-xs text-red-400">❌ ${p.cons.slice(0,2).join(' · ')}</span>
+              </div>
             </div>
-            <button
-              onclick="showModal('${p.id}')"
-              class="flex-shrink-0 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-lg transition-colors"
-            >
+            <button onclick="showModal('${p.id}')"
+                    class="flex-shrink-0 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap">
               📋 Pros &amp; Cons
             </button>
           </div>
-          <!-- Quick pros/cons strip -->
-          <div class="mt-3 flex gap-4 flex-wrap">
-            <div class="text-xs text-emerald-400">
-              ✅ ${p.pros.slice(0, 2).join(' · ')}
+        </div>`;
+    }
+
+    // ── Input bar ─────────────────────────────────────────────────────────────
+    function renderInputBar(mode) {
+      const bar     = document.getElementById('input-bar');
+      const lastVal = selectedPattern?._lastPrompt || selectedPattern?.defaultPrompt || '';
+
+      if (mode === 'idle' || mode === 'running') {
+        const busy = mode === 'running';
+        bar.className = 'flex-shrink-0 border-t border-slate-800 bg-slate-900 p-4';
+        bar.innerHTML = `
+          <div class="flex gap-3 items-end max-w-4xl mx-auto">
+            <div class="flex-1">
+              <label class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5 block">
+                Scenario Prompt
+              </label>
+              <textarea id="prompt-input" rows="2" ${busy ? 'disabled' : ''}
+                class="brand-focus w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3 text-sm
+                       text-slate-100 placeholder-slate-500 resize-none transition-all
+                       disabled:opacity-50 disabled:cursor-not-allowed"
+                placeholder="Describe your incident or scenario..."
+              ></textarea>
             </div>
-            <div class="text-xs text-red-400">
-              ❌ ${p.cons.slice(0, 2).join(' · ')}
+            <div class="flex flex-col gap-2 pb-0.5">
+              <button id="run-btn" onclick="runPattern()" ${busy ? 'disabled' : ''}
+                class="px-5 py-2.5 text-white text-sm font-semibold rounded-xl transition-colors
+                       flex items-center gap-2 whitespace-nowrap
+                       disabled:opacity-60 disabled:cursor-not-allowed"
+                style="background:${busy ? '#5c2d00' : '#F06C00'}"
+                onmouseover="if(!this.disabled)this.style.background='#D95F00'"
+                onmouseout ="if(!this.disabled)this.style.background='${busy ? '#5c2d00' : '#F06C00'}'">
+                ${busy
+                  ? `<svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                       <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                       <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+                     </svg> Running...`
+                  : '▶ Run Demo'}
+              </button>
+              <button onclick="clearChat()" ${busy ? 'disabled' : ''}
+                class="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-400 text-sm rounded-xl
+                       transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+                Clear
+              </button>
             </div>
-          </div>
-        </div>
-      `;
+          </div>`;
+        const ta = document.getElementById('prompt-input');
+        if (ta) ta.value = lastVal;
+        return;
+      }
+
+      if (mode === 'clarification') {
+        bar.className = 'flex-shrink-0 border-t p-4 transition-all';
+        bar.style.cssText = 'border-top: 1.5px solid rgba(240,108,0,0.45); background: rgba(30,10,0,0.6);';
+        bar.innerHTML = `
+          <div class="max-w-4xl mx-auto">
+            <div class="flex items-center gap-2 mb-2.5">
+              <span class="relative flex h-2.5 w-2.5">
+                <span class="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75"
+                      style="background:#F06C00"></span>
+                <span class="relative inline-flex rounded-full h-2.5 w-2.5" style="background:#F06C00"></span>
+              </span>
+              <span class="text-sm font-semibold" style="color:#FF8C1A">
+                Agent needs more information — type your reply and press Enter
+              </span>
+            </div>
+            <div class="flex gap-3 items-end">
+              <textarea id="clarification-input" rows="2"
+                class="brand-focus flex-1 bg-slate-800 rounded-xl px-4 py-3 text-sm text-slate-100
+                       placeholder-slate-400 resize-none transition-all"
+                style="border: 1.5px solid rgba(240,108,0,0.5);"
+                placeholder="Type your response... (Enter to send, Shift+Enter for new line)"
+                onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();submitClarification();}">
+              </textarea>
+              <button onclick="submitClarification()"
+                class="px-5 py-2.5 text-white text-sm font-semibold rounded-xl flex-shrink-0
+                       transition-colors whitespace-nowrap flex items-center gap-2"
+                style="background:#F06C00"
+                onmouseover="this.style.background='#D95F00'"
+                onmouseout ="this.style.background='#F06C00'">
+                💬 Send Reply
+              </button>
+            </div>
+          </div>`;
+        setTimeout(() => document.getElementById('clarification-input')?.focus(), 50);
+        return;
+      }
+
+      if (mode === 'done') {
+        bar.className = 'flex-shrink-0 border-t border-slate-800 bg-slate-900 p-4';
+        bar.style.cssText = '';
+        bar.innerHTML = `
+          <div class="max-w-4xl mx-auto">
+            <div class="flex gap-3 items-end">
+              <div class="flex-1">
+                <label class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1.5 block">
+                  Scenario Prompt
+                </label>
+                <textarea id="prompt-input" rows="2"
+                  class="brand-focus w-full bg-slate-800 border border-slate-700 rounded-xl px-4 py-3
+                         text-sm text-slate-100 placeholder-slate-500 resize-none transition-all"
+                  placeholder="Describe your incident or scenario..."></textarea>
+              </div>
+              <div class="flex flex-col gap-2 pb-0.5">
+                <button onclick="runPattern()"
+                  class="px-5 py-2.5 text-white text-sm font-semibold rounded-xl transition-colors
+                         flex items-center gap-2 whitespace-nowrap"
+                  style="background:#F06C00"
+                  onmouseover="this.style.background='#D95F00'"
+                  onmouseout ="this.style.background='#F06C00'">
+                  ▶ Run Again
+                </button>
+                <button onclick="clearChat()"
+                  class="px-5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-400 text-sm rounded-xl transition-colors">
+                  Clear
+                </button>
+              </div>
+            </div>
+          </div>`;
+        const ta = document.getElementById('prompt-input');
+        if (ta) ta.value = lastVal;
+      }
     }
 
     // ── Run Demo ──────────────────────────────────────────────────────────────
     function runPattern() {
       if (isRunning || !selectedPattern) return;
 
-      const prompt = document.getElementById('prompt-input').value.trim();
-      if (!prompt) {
-        alert('Please enter a scenario prompt.');
-        return;
-      }
+      const ta     = document.getElementById('prompt-input');
+      const prompt = ta?.value.trim();
+      if (!prompt) { alert('Please enter a scenario prompt.'); return; }
 
-      clearStream();
-      setRunning(true);
+      selectedPattern._lastPrompt = prompt;
+
+      // Reset to conversation tab and clear forms/panel when starting a new run
+      filledForms      = [];
+      currentFormIndex = 0;
+      currentPageIndex = 0;
+      agentPanelState  = {};
+      const formsBadge = document.getElementById('forms-badge');
+      if (formsBadge) { formsBadge.textContent = '0'; formsBadge.classList.add('hidden'); }
+      // Dim forms tab again — re-enabled when first FormFilled arrives
+      const formsTab = document.getElementById('tab-forms');
+      if (formsTab) { formsTab.disabled = true; formsTab.style.opacity = '0.35'; formsTab.style.cursor = 'not-allowed'; }
+      switchTab('conversation', false);
+
+      clearChat(false);
+      isRunning = true;
+      pendingConvId = null;
+      renderInputBar('running');
+      appendUserMessage(prompt);
 
       const url = `/api/run?pattern=${encodeURIComponent(selectedPattern.id)}&prompt=${encodeURIComponent(prompt)}`;
+      const stream = activeStream = new EventSource(url);
 
-      activeStream = new EventSource(url);
-
-      activeStream.onmessage = (e) => {
+      stream.onmessage = (e) => {
         if (e.data === '[DONE]') {
-          activeStream.close();
-          setRunning(false);
+          stream.close();
+          if (activeStream === stream) activeStream = null;
+          finishRun();
           return;
         }
         try {
-          const evt = JSON.parse(e.data);
-          appendAgentEvent(evt);
+          appendAgentEvent(JSON.parse(e.data));
           autoScroll();
-        } catch (err) {
-          console.error('Parse error:', err, e.data);
-        }
+        } catch (err) { console.error('Parse error:', err, e.data); }
       };
 
-      activeStream.onerror = () => {
-        if (isRunning) {
-          appendSystemNote('⚠️ Stream disconnected or error. Check the server console.');
-          setRunning(false);
+      stream.onerror = () => {
+        if (activeStream === stream && isRunning) {
+          appendSysNote('⚠️ Stream disconnected. Check the server console.');
+          finishRun();
         }
-        activeStream?.close();
+        stream.close();
+        if (activeStream === stream) activeStream = null;
       };
     }
 
+    function finishRun() {
+      isRunning = false;
+      if (selectedPattern) selectedPattern._inputMode = 'done';
+
+      // Strip FORM_FIELDS blocks (any capitalisation variant) and apply markdown
+      const formBlockRe = /\n(FORM_FIELDS:|Form Fields:|FORM FIELDS:|form_fields:|form fields:)/i;
+      const formStartRe =   /(FORM_FIELDS:|Form Fields:|FORM FIELDS:|form_fields:|form fields:)/i;
+      document.querySelectorAll('pre.bubble-text[data-raw]').forEach(el => {
+        let raw = el.dataset.raw || '';
+        const m = raw.search(formBlockRe);
+        if (m >= 0) { raw = raw.substring(0, m).trimEnd(); }
+        else {
+          const m2 = raw.search(formStartRe);
+          if (m2 >= 0) raw = raw.substring(0, m2).trimEnd();
+        }
+        el.dataset.raw = raw;
+        el.innerHTML = mdToHtml(raw);
+      });
+
+      renderInputBar('done');
+    }
+
+    // ── Clarification reply ───────────────────────────────────────────────────
+    async function submitClarification() {
+      const input   = document.getElementById('clarification-input');
+      const message = input?.value.trim();
+      if (!message || !pendingConvId) return;
+
+      const convId  = pendingConvId;
+      pendingConvId = null;
+
+      renderInputBar('running');
+      appendUserMessage(message);
+
+      await fetch(
+        `/api/respond?id=${encodeURIComponent(convId)}&message=${encodeURIComponent(message)}`,
+        { method: 'POST' }
+      );
+    }
+
+    // ── Event renderer ────────────────────────────────────────────────────────
     function appendAgentEvent(evt) {
-      const area = document.getElementById('stream-area');
+      document.getElementById('chat-placeholder')?.remove();
+      const { agentName, agentColour, content, eventType, conversationId } = evt;
 
-      // Remove placeholder
-      document.getElementById('stream-placeholder')?.remove();
+      // For hybrid pattern, specialist agents render as a compact panel — not bubbles
+      const isHybridSpec = selectedPattern?.id === 'hybrid' && agentName !== 'Coordinator';
 
-      const { agentName, agentColour, content, eventType } = evt;
+      switch (eventType) {
 
-      // Remove any existing "thinking" bubble for this agent when a real message arrives
-      if (eventType === 'AgentResponse') {
-        const thinkingEl = document.getElementById(`thinking-${sanitiseId(agentName)}`);
-        if (thinkingEl) {
-          // Check if there's an open-response bubble to append to
-          const existingBubble = document.getElementById(`bubble-${sanitiseId(agentName)}`);
-          if (existingBubble) {
-            const contentEl = existingBubble.querySelector('.bubble-content');
-            contentEl.textContent += content;
-            thinkingEl.remove();
-            return;
+        // ── Thinking indicator ───────────────────────────────────────────────
+        case 'AgentThinking': {
+          if (isHybridSpec) {
+            // Add this agent to the live panel
+            if (!agentPanelState[agentName]) {
+              agentPanelState[agentName] = { colour: agentColour, status: 'working' };
+            }
+            renderAgentPanel();
+            break;
           }
-          thinkingEl.remove();
-        }
-      }
-
-      if (eventType === 'AgentThinking') {
-        // Show a "thinking" indicator
-        const el = document.createElement('div');
-        el.id = `thinking-${sanitiseId(agentName)}`;
-        el.className = 'agent-bubble flex items-start gap-2 py-1';
-        el.innerHTML = `
-          <div class="w-2 h-2 rounded-full mt-3 flex-shrink-0" style="background:${agentColour}"></div>
-          <div class="flex-1">
-            <span class="text-xs font-semibold" style="color:${agentColour}">${agentName}</span>
-            <div class="mt-1 flex items-center gap-1 text-slate-500 text-xs">
-              <span class="typing-dot" style="background:${agentColour}"></span>
-              <span class="typing-dot" style="background:${agentColour}"></span>
-              <span class="typing-dot" style="background:${agentColour}"></span>
-              <span class="ml-1 italic">thinking...</span>
-            </div>
-          </div>
-        `;
-        area.appendChild(el);
-        return;
-      }
-
-      if (eventType === 'AgentResponse') {
-        // Create or append to existing bubble for this agent
-        let bubbleEl = document.getElementById(`bubble-${sanitiseId(agentName)}`);
-        if (!bubbleEl) {
-          bubbleEl = document.createElement('div');
-          bubbleEl.id = `bubble-${sanitiseId(agentName)}`;
-          bubbleEl.className = 'agent-bubble flex items-start gap-2 py-1';
-          bubbleEl.innerHTML = `
-            <div class="w-2 h-2 rounded-full mt-1.5 flex-shrink-0" style="background:${agentColour}"></div>
-            <div class="flex-1 min-w-0">
-              <span class="text-xs font-semibold" style="color:${agentColour}">${agentName}</span>
-              <div class="mt-1 text-sm text-slate-200 bg-slate-900 rounded-lg px-3 py-2 border border-slate-800 leading-relaxed">
-                <pre class="bubble-content font-sans"></pre>
+          // Coordinator / non-hybrid → normal thinking dots
+          document.getElementById(`thinker-${sid(agentName)}`)?.remove();
+          const thEl = agentRow(`thinker-${sid(agentName)}`);
+          thEl.innerHTML = `
+            ${avatar(agentName, agentColour)}
+            <div>
+              <div class="text-xs font-semibold mb-1.5" style="color:${agentColour}">${esc(agentName)}</div>
+              <div class="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-2xl rounded-tl-none
+                          bg-slate-800 border border-slate-700">
+                <span class="dot" style="background:${agentColour}"></span>
+                <span class="dot" style="background:${agentColour}"></span>
+                <span class="dot" style="background:${agentColour}"></span>
+                <span class="text-xs text-slate-500 italic ml-1">thinking...</span>
               </div>
-            </div>
-          `;
-          area.appendChild(bubbleEl);
+            </div>`;
+          chat(thEl);
+          break;
         }
-        bubbleEl.querySelector('.bubble-content').textContent += content;
-        return;
-      }
 
-      if (eventType === 'SystemNote') {
-        // Close any open bubble (next message is a new agent turn)
-        document.querySelectorAll('[id^="bubble-"]').forEach(el => el.removeAttribute('id'));
-        const el = document.createElement('div');
-        el.className = 'agent-bubble text-xs text-slate-500 italic py-1 px-1 flex items-center gap-2';
-        el.innerHTML = `<span class="text-slate-600">─────</span> ${escapeHtml(content)} <span class="text-slate-600">─────</span>`;
-        area.appendChild(el);
-        return;
-      }
+        // ── Streaming agent response ─────────────────────────────────────────
+        case 'AgentResponse': {
+          if (isHybridSpec) break; // suppressed — panel shows status instead
 
-      if (eventType === 'AggregatedResult') {
-        document.querySelectorAll('[id^="bubble-"]').forEach(el => el.removeAttribute('id'));
-        const el = document.createElement('div');
-        el.className = 'agent-bubble my-3';
-        el.innerHTML = `
-          <div class="border border-violet-500/40 bg-violet-950/30 rounded-xl p-4">
-            <div class="flex items-center gap-2 mb-3">
-              <span class="text-lg">🎯</span>
-              <span class="font-bold text-violet-300 text-sm">Coordinator — Synthesised Result</span>
-            </div>
-            <pre class="text-sm text-slate-200 font-sans leading-relaxed whitespace-pre-wrap">${escapeHtml(content)}</pre>
-          </div>
-        `;
-        area.appendChild(el);
-        return;
-      }
+          document.getElementById(`thinker-${sid(agentName)}`)?.remove();
+          let el = document.getElementById(`bubble-${sid(agentName)}`);
+          if (!el) {
+            el = agentRow(`bubble-${sid(agentName)}`);
+            el.innerHTML = `
+              ${avatar(agentName, agentColour)}
+              <div class="flex-1 min-w-0" style="max-width:78%">
+                <div class="text-xs font-semibold mb-1.5" style="color:${agentColour}">${esc(agentName)}</div>
+                <div class="px-4 py-3 rounded-2xl rounded-tl-none bg-slate-800 border border-slate-700
+                             text-sm text-slate-200 leading-relaxed">
+                  <pre class="bubble-text" data-raw=""></pre>
+                </div>
+              </div>`;
+            chat(el);
+          }
+          const pre = el.querySelector('pre.bubble-text');
+          pre.dataset.raw = (pre.dataset.raw || '') + content;
+          pre.textContent  = pre.dataset.raw;
+          break;
+        }
 
-      if (eventType === 'Complete') {
-        document.querySelectorAll('[id^="bubble-"]').forEach(el => el.removeAttribute('id'));
-        const el = document.createElement('div');
-        el.className = 'agent-bubble mt-4';
-        el.innerHTML = `
-          <div class="border border-emerald-500/40 bg-emerald-950/30 rounded-xl p-3 flex items-center gap-3">
-            <span class="text-xl">✅</span>
-            <span class="text-emerald-300 text-sm font-medium">${escapeHtml(content)}</span>
-          </div>
-        `;
-        area.appendChild(el);
-        return;
-      }
+        // ── Collapsible reasoning card ───────────────────────────────────────
+        case 'Reasoning': {
+          document.getElementById(`thinker-${sid(agentName)}`)?.remove();
+          const el = document.createElement('div');
+          el.className = 'chat-msg flex items-start gap-2.5';
+          el.innerHTML = `
+            <div class="w-7 flex-shrink-0"></div>
+            <details class="reasoning flex-1 rounded-xl overflow-hidden"
+                     style="max-width:78%;background:rgba(240,108,0,0.06);border:1px solid rgba(240,108,0,0.18)">
+              <summary class="px-3 py-2.5 flex items-center gap-2 text-xs font-semibold select-none"
+                       style="color:#F06C00">
+                <span class="chevron">▶</span>
+                <span>🧠 ${esc(agentName)} — Reasoning</span>
+                <span class="ml-auto text-slate-500 font-normal text-[11px]">click to expand</span>
+              </summary>
+              <div class="px-3 py-2.5 text-xs text-slate-400 leading-relaxed border-t"
+                   style="border-color:rgba(240,108,0,0.15)">
+                ${esc(content)}
+              </div>
+            </details>`;
+          chat(el);
+          break;
+        }
 
-      if (eventType === 'Error') {
-        const el = document.createElement('div');
-        el.className = 'agent-bubble';
-        el.innerHTML = `
-          <div class="border border-red-500/40 bg-red-950/30 rounded-xl p-3 flex items-center gap-3">
-            <span>⚠️</span>
-            <span class="text-red-300 text-sm">${escapeHtml(content)}</span>
-          </div>
-        `;
-        area.appendChild(el);
+        // ── Clarification request ────────────────────────────────────────────
+        case 'ClarificationRequest': {
+          document.getElementById(`thinker-${sid(agentName)}`)?.remove();
+          pendingConvId = conversationId;
+
+          const el = agentRow(null);
+          el.innerHTML = `
+            ${avatar(agentName, agentColour)}
+            <div class="flex-1 min-w-0" style="max-width:78%">
+              <div class="text-xs font-semibold mb-1.5" style="color:${agentColour}">${esc(agentName)}</div>
+              <div class="px-4 py-3 rounded-2xl rounded-tl-none text-sm text-white leading-relaxed"
+                   style="background:rgba(240,108,0,0.1);border:1.5px solid rgba(240,108,0,0.5)">
+                <div class="flex items-center gap-1.5 mb-2.5">
+                  <span class="inline-flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded-full"
+                        style="background:rgba(240,108,0,0.2);color:#FF8C1A">
+                    💬 Clarification needed
+                  </span>
+                </div>
+                ${esc(content)}
+              </div>
+            </div>`;
+          chat(el);
+          renderInputBar('clarification');
+          break;
+        }
+
+        // ── Structured summary card ──────────────────────────────────────────
+        case 'StructuredSummary': {
+          document.getElementById(`thinker-${sid(agentName)}`)?.remove();
+          document.querySelectorAll('[id^="bubble-"]').forEach(el => el.removeAttribute('id'));
+          const s = evt.summary;
+          if (!s) break;
+
+          const sevColours = {
+            Low:      { border: '#10b981', bg: 'rgba(16,185,129,0.1)',  text: '#10b981', badge: 'rgba(16,185,129,0.15)' },
+            Medium:   { border: '#f59e0b', bg: 'rgba(245,158,11,0.1)',  text: '#f59e0b', badge: 'rgba(245,158,11,0.15)' },
+            High:     { border: '#ef4444', bg: 'rgba(239,68,68,0.1)',   text: '#ef4444', badge: 'rgba(239,68,68,0.15)' },
+            Critical: { border: '#7c3aed', bg: 'rgba(124,58,237,0.1)',  text: '#a78bfa', badge: 'rgba(124,58,237,0.15)' },
+          };
+          const c = sevColours[s.severity] || sevColours.Medium;
+
+          const immediateHtml = (s.immediateActions || []).length
+            ? (s.immediateActions).map(a =>
+                `<li class="flex gap-1.5 text-sm text-slate-200 leading-snug">
+                   <span class="text-red-400 mt-0.5 flex-shrink-0">•</span><span>${esc(a)}</span>
+                 </li>`).join('')
+            : '<li class="text-xs text-slate-500 italic">None specified</li>';
+
+          const actions24Html = (s.actions24h || []).length
+            ? (s.actions24h).map(a =>
+                `<li class="flex gap-1.5 text-sm text-slate-200 leading-snug">
+                   <span class="text-amber-400 mt-0.5 flex-shrink-0">•</span><span>${esc(a)}</span>
+                 </li>`).join('')
+            : '<li class="text-xs text-slate-500 italic">None specified</li>';
+
+          const regulatoryHtml = s.regulatoryNote
+            ? `<div class="px-5 py-2.5 flex items-start gap-2"
+                    style="background:rgba(245,158,11,0.06);border-top:1px solid rgba(245,158,11,0.2)">
+                 <span class="text-amber-400 text-sm flex-shrink-0">📋</span>
+                 <div>
+                   <span class="text-xs font-bold text-amber-400">Regulatory: </span>
+                   <span class="text-xs text-slate-300">${esc(s.regulatoryNote)}</span>
+                 </div>
+               </div>` : '';
+
+          const formsHint = filledForms.length > 0
+            ? `<div class="px-5 py-2.5 flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
+                    style="background:rgba(240,108,0,0.08);border-top:1px solid rgba(240,108,0,0.2)"
+                    onclick="switchTab('forms')">
+                 <span class="text-sm">📋</span>
+                 <span class="text-xs font-semibold" style="color:#FF8C1A">
+                   ${filledForms.length} form(s) pre-filled — click to review
+                 </span>
+                 <span class="ml-auto text-xs text-slate-500">→</span>
+               </div>` : '';
+
+          const el = document.createElement('div');
+          el.className = 'chat-msg my-2';
+          el.innerHTML = `
+            <div class="rounded-2xl overflow-hidden" style="border:1px solid ${c.border}40">
+              <div class="px-5 py-3 flex items-center justify-between"
+                   style="background:${c.bg};border-bottom:1px solid ${c.border}30">
+                <div class="flex items-center gap-3">
+                  <div class="w-9 h-9 rounded-full flex items-center justify-center font-black text-white text-sm flex-shrink-0"
+                       style="background:${c.border}">
+                    ${esc(s.severity[0])}
+                  </div>
+                  <div>
+                    <div class="text-xs font-bold uppercase tracking-wider" style="color:${c.text}">
+                      ${esc(s.severity)} Severity
+                    </div>
+                    <div class="font-bold text-white text-sm">Coordinator — Incident Summary</div>
+                  </div>
+                </div>
+                <span class="text-xl">🎯</span>
+              </div>
+
+              <div class="px-5 py-3 bg-slate-800/40" style="border-bottom:1px solid rgba(255,255,255,0.05)">
+                <p class="text-sm text-slate-200 leading-relaxed">${esc(s.executiveSummary)}</p>
+              </div>
+
+              <div class="grid grid-cols-2 bg-slate-900/50" style="border-bottom:1px solid rgba(255,255,255,0.05)">
+                <div class="px-5 py-4" style="border-right:1px solid rgba(255,255,255,0.05)">
+                  <div class="text-xs font-bold uppercase tracking-wider text-red-400 mb-2.5">⚡ Immediate Actions</div>
+                  <ul class="space-y-2">${immediateHtml}</ul>
+                </div>
+                <div class="px-5 py-4">
+                  <div class="text-xs font-bold uppercase tracking-wider text-amber-400 mb-2.5">🕐 Within 24 Hours</div>
+                  <ul class="space-y-2">${actions24Html}</ul>
+                </div>
+              </div>
+
+              ${regulatoryHtml}
+              ${formsHint}
+            </div>`;
+          chat(el);
+          break;
+        }
+
+        // ── Form filled event ────────────────────────────────────────────────
+        case 'FormFilled': {
+          const form = evt.form;
+          if (!form) break;
+          filledForms.push(form);
+
+          // Mark corresponding specialist as done in the panel
+          const specName = DOMAIN_AGENT[form.domain];
+          if (specName && agentPanelState[specName]) {
+            agentPanelState[specName].status = 'done';
+            renderAgentPanel();
+          }
+
+          // First form — reveal the Forms tab
+          if (filledForms.length === 1 && selectedPattern?.id === 'hybrid') {
+            revealFormsTab();
+          }
+          // Update badge
+          const badge = document.getElementById('forms-badge');
+          if (badge) { badge.textContent = filledForms.length; badge.classList.remove('hidden'); }
+
+          // If already on forms tab, re-render
+          if (activePanelTab === 'forms') renderFormsView();
+          break;
+        }
+
+        // ── System divider note ──────────────────────────────────────────────
+        case 'SystemNote': {
+          document.querySelectorAll('[id^="bubble-"]').forEach(el => el.removeAttribute('id'));
+
+          // Mark all panel agents as done when synthesis begins
+          if (content.includes('synthesising')) {
+            Object.keys(agentPanelState).forEach(k => {
+              agentPanelState[k].status = 'done';
+            });
+            renderAgentPanel();
+          }
+
+          const sysEl = document.createElement('div');
+          sysEl.className = 'chat-msg flex items-center gap-3 py-0.5';
+          sysEl.innerHTML = `
+            <div class="flex-1 h-px bg-slate-800"></div>
+            <span class="text-xs text-slate-500 italic px-2 whitespace-nowrap flex-shrink-0">${esc(content)}</span>
+            <div class="flex-1 h-px bg-slate-800"></div>`;
+          chat(sysEl);
+          break;
+        }
+
+        // ── Non-streaming aggregated result (other patterns) ─────────────────
+        case 'AggregatedResult': {
+          document.querySelectorAll('[id^="bubble-"]').forEach(el => el.removeAttribute('id'));
+          const el = document.createElement('div');
+          el.className = 'chat-msg my-2';
+          el.innerHTML = `
+            <div class="rounded-2xl p-4" style="background:rgba(42,18,0,0.45);border:1px solid rgba(240,108,0,0.3)">
+              <div class="flex items-center gap-2 mb-3">
+                <span>🎯</span>
+                <span class="font-bold text-sm" style="color:#FFA040">Coordinator — Synthesised Response</span>
+              </div>
+              <pre class="bubble-text text-sm text-slate-200 leading-relaxed" data-raw=""></pre>
+            </div>`;
+          const pre = el.querySelector('pre.bubble-text');
+          pre.dataset.raw = content;
+          pre.textContent  = content;
+          chat(el);
+          break;
+        }
+
+        // ── Complete banner ──────────────────────────────────────────────────
+        case 'Complete': {
+          document.querySelectorAll('[id^="bubble-"]').forEach(el => el.removeAttribute('id'));
+          const el = document.createElement('div');
+          el.className = 'chat-msg flex items-center justify-center mt-2 mb-1';
+          el.innerHTML = `
+            <div class="inline-flex items-center gap-2.5 px-5 py-2.5 rounded-full
+                        border border-emerald-500/40 bg-emerald-950/30">
+              <span class="text-lg">✅</span>
+              <span class="text-emerald-300 text-sm font-medium">${esc(content)}</span>
+            </div>`;
+          chat(el);
+          break;
+        }
+
+        // ── Error banner ─────────────────────────────────────────────────────
+        case 'Error': {
+          const el = document.createElement('div');
+          el.className = 'chat-msg flex items-center justify-center mt-2';
+          el.innerHTML = `
+            <div class="inline-flex items-center gap-2.5 px-4 py-2.5 rounded-xl
+                        border border-red-500/40 bg-red-950/30">
+              <span>⚠️</span>
+              <span class="text-red-300 text-sm">${esc(content)}</span>
+            </div>`;
+          chat(el);
+          break;
+        }
       }
     }
 
-    function appendSystemNote(msg) {
-      const area = document.getElementById('stream-area');
-      document.getElementById('stream-placeholder')?.remove();
-      const el = document.createElement('div');
-      el.className = 'text-xs text-slate-500 italic py-1 px-1';
-      el.textContent = msg;
-      area.appendChild(el);
+    // ── Agent progress panel (hybrid only) ───────────────────────────────────
+    // Renders a compact live card showing each specialist's working/done status.
+    // Called whenever agentPanelState changes.
+
+    function renderAgentPanel() {
+      let panel = document.getElementById('agents-panel');
+      if (!panel) {
+        panel = document.createElement('div');
+        panel.id = 'agents-panel';
+        panel.className = 'chat-msg';
+        document.getElementById('chat-area').appendChild(panel);
+      }
+
+      const entries  = Object.entries(agentPanelState);
+      const doneCount = entries.filter(([, a]) => a.status === 'done').length;
+      const allDone   = entries.length > 0 && doneCount === entries.length;
+
+      const headerHtml = allDone
+        ? `<div class="w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0"
+                style="background:rgba(16,185,129,0.2)">
+             <svg class="w-3 h-3" style="color:#10b981" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/>
+             </svg>
+           </div>
+           <span class="text-sm font-semibold text-slate-200">All specialists complete</span>`
+        : `<svg class="w-4 h-4 animate-spin flex-shrink-0" style="color:#F06C00"
+                fill="none" viewBox="0 0 24 24">
+             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+           </svg>
+           <span class="text-sm font-semibold text-slate-300">
+             ${entries.length} specialist${entries.length !== 1 ? 's' : ''} handling your report
+           </span>`;
+
+      const rowsHtml = entries.map(([name, agent]) => {
+        const statusHtml = agent.status === 'done'
+          ? `<div class="flex items-center gap-1 text-xs font-semibold" style="color:#10b981">
+               <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
+               </svg> Complete
+             </div>`
+          : `<div class="flex items-center gap-1">
+               <span class="dot" style="background:${agent.colour}"></span>
+               <span class="dot" style="background:${agent.colour}"></span>
+               <span class="dot" style="background:${agent.colour}"></span>
+               <span class="text-xs text-slate-500 italic ml-0.5">Analysing</span>
+             </div>`;
+
+        return `
+          <div class="flex items-center gap-3">
+            <div class="w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center
+                        text-xs font-bold text-white" style="background:${agent.colour}">
+              ${esc(name[0])}
+            </div>
+            <span class="text-sm text-slate-300 flex-1">${esc(name)}</span>
+            ${statusHtml}
+          </div>`;
+      }).join('');
+
+      panel.innerHTML = `
+        <div class="rounded-2xl overflow-hidden"
+             style="background:rgba(15,23,42,0.9);border:1px solid rgba(100,116,139,0.2)">
+          <div class="px-4 py-2.5 flex items-center gap-2.5 border-b border-slate-800">
+            ${headerHtml}
+            <span class="ml-auto text-xs text-slate-600 tabular-nums">${doneCount}/${entries.length}</span>
+          </div>
+          <div class="px-4 py-3 space-y-2.5">${rowsHtml}</div>
+        </div>`;
+
       autoScroll();
+    }
+
+    // ── Forms view ────────────────────────────────────────────────────────────
+
+    function domainIcon(domain) {
+      return { safety: '🦺', security: '🔒', facilities: '🏗️' }[domain] || '📄';
+    }
+
+    function selectForm(idx) { currentFormIndex = idx; currentPageIndex = 0; renderFormsView(); }
+    function goToPage(idx)    { currentPageIndex = idx; renderFormsView(); }
+
+    function renderFormsView() {
+      const area = document.getElementById('forms-area');
+      if (!area) return;
+
+      if (filledForms.length === 0) {
+        area.innerHTML = `
+          <div class="flex items-center justify-center h-full text-slate-500">
+            <div class="text-center">
+              <p class="text-4xl mb-3">📋</p>
+              <p class="font-medium text-slate-400 mb-1">No forms yet</p>
+              <p class="text-sm">Run a scenario to see AI-pre-filled forms appear here.</p>
+            </div>
+          </div>`;
+        return;
+      }
+
+      // Clamp indices
+      currentFormIndex = Math.min(currentFormIndex, filledForms.length - 1);
+      const form = filledForms[currentFormIndex];
+      currentPageIndex = Math.min(currentPageIndex, form.pages.length - 1);
+      const page = form.pages[currentPageIndex];
+
+      // Domain selector tabs
+      const domainTabs = filledForms.length > 1 ? `
+        <div class="flex-shrink-0 flex items-center gap-1 px-4 py-2 bg-slate-900 border-b border-slate-800 overflow-x-auto">
+          ${filledForms.map((f, i) => `
+            <button onclick="selectForm(${i})"
+                    class="px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap flex items-center gap-1.5 ${
+                      i === currentFormIndex
+                        ? 'text-white' : 'text-slate-400 hover:text-slate-300 hover:bg-slate-800'
+                    }"
+                    style="${i === currentFormIndex ? 'background:rgba(240,108,0,0.2);border:1px solid rgba(240,108,0,0.35);color:#FF8C1A' : ''}">
+              ${domainIcon(f.domain)} ${esc(f.formTitle)}
+            </button>`).join('')}
+        </div>` : '';
+
+      // Page breadcrumb
+      const breadcrumb = form.pages.map((pg, i) => `
+        <button onclick="goToPage(${i})"
+                class="flex items-center gap-1 text-xs px-2 py-1 rounded-md transition-colors ${
+                  i === currentPageIndex
+                    ? 'font-semibold' : 'text-slate-500 hover:bg-slate-800 hover:text-slate-300'
+                }"
+                style="${i === currentPageIndex ? 'background:rgba(240,108,0,0.15);color:#FF8C1A' : ''}">
+          <span class="w-4 h-4 rounded-full text-[10px] flex items-center justify-center font-bold flex-shrink-0 ${
+            i === currentPageIndex ? '' : 'bg-slate-700 text-slate-400'
+          }" style="${i === currentPageIndex ? 'background:#F06C00;color:white' : ''}">${i + 1}</span>
+          ${esc(pg.title)}
+        </button>
+        ${i < form.pages.length - 1 ? '<span class="text-slate-700 text-xs">›</span>' : ''}`).join('');
+
+      // Fields
+      const fieldsHtml = page.fields.map(f => {
+        const filled  = f.aiFilled && f.value;
+        const aiClass = filled ? 'ai-field' : '';
+
+        let input;
+        if (f.type === 'select' && f.options) {
+          const opts = f.options.map(o =>
+            `<option value="${esc(o)}" ${f.value === o ? 'selected' : ''}>${esc(o)}</option>`).join('');
+          input = `<select class="form-input ${aiClass}">${opts}</select>`;
+        } else if (f.type === 'textarea') {
+          input = `<textarea class="form-input ${aiClass}" rows="3">${esc(f.value || '')}</textarea>`;
+        } else {
+          input = `<input type="text" class="form-input ${aiClass}" value="${esc(f.value || '')}" />`;
+        }
+
+        const aiTag = filled
+          ? `<span class="text-[10px] px-1.5 py-0.5 rounded-full font-semibold ml-1.5"
+                  style="background:rgba(240,108,0,0.15);color:#FF8C1A;border:1px solid rgba(240,108,0,0.25)">
+               🤖 AI filled
+             </span>` : '';
+
+        return `
+          <div>
+            <label class="flex items-center text-xs font-semibold text-slate-300 mb-1.5">
+              ${esc(f.label)}${aiTag}
+            </label>
+            ${input}
+          </div>`;
+      }).join('');
+
+      const isLastPage = currentPageIndex === form.pages.length - 1;
+
+      area.innerHTML = `
+        ${domainTabs}
+        <div class="flex-shrink-0 px-6 py-3 bg-slate-900 border-b border-slate-800">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-1 flex-wrap">${breadcrumb}</div>
+            <span class="text-xs text-slate-500 flex-shrink-0 ml-2">
+              Page ${currentPageIndex + 1} / ${form.pages.length}
+            </span>
+          </div>
+        </div>
+
+        <div class="flex-1 overflow-y-auto px-6 py-5">
+          <div class="max-w-2xl mx-auto space-y-5">
+            <div>
+              <h3 class="text-sm font-bold text-white mb-0.5">${esc(page.title)}</h3>
+              <p class="text-xs text-slate-500">
+                ${esc(form.formTitle)} · Page ${currentPageIndex + 1} of ${form.pages.length}
+              </p>
+            </div>
+            ${fieldsHtml}
+          </div>
+        </div>
+
+        <div class="flex-shrink-0 border-t border-slate-800 bg-slate-900 px-6 py-3
+                    flex items-center justify-between">
+          <button onclick="goToPage(${currentPageIndex - 1})"
+                  ${currentPageIndex === 0 ? 'disabled' : ''}
+                  class="px-4 py-2 text-sm bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg
+                         disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5">
+            ← Previous
+          </button>
+
+          <span class="text-xs text-slate-500 flex items-center gap-1.5">
+            <span class="inline-block w-2 h-2 rounded-full" style="background:#F06C00"></span>
+            Orange border = AI pre-filled
+          </span>
+
+          ${isLastPage
+            ? `<button onclick="submitForm()"
+                       class="px-5 py-2 text-sm text-white rounded-lg font-semibold transition-colors
+                              flex items-center gap-1.5"
+                       style="background:#10b981"
+                       onmouseover="this.style.background='#059669'"
+                       onmouseout ="this.style.background='#10b981'">
+                 ✓ Submit Report
+               </button>`
+            : `<button onclick="goToPage(${currentPageIndex + 1})"
+                       class="px-5 py-2 text-sm text-white rounded-lg font-semibold transition-colors
+                              flex items-center gap-1.5"
+                       style="background:#F06C00"
+                       onmouseover="this.style.background='#D95F00'"
+                       onmouseout ="this.style.background='#F06C00'">
+                 Next →
+               </button>`}
+        </div>`;
+    }
+
+    function submitForm() {
+      const area = document.getElementById('forms-area');
+      if (!area) return;
+
+      const form = filledForms[currentFormIndex];
+      const ref  = 'INC-' + new Date().getFullYear() + '-' +
+                   String(Math.floor(Math.random() * 9000) + 1000).padStart(4, '0');
+
+      area.innerHTML = `
+        <div class="flex items-center justify-center h-full">
+          <div class="text-center max-w-sm px-6">
+            <div class="w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-5
+                        border-2 border-emerald-500"
+                 style="background:rgba(16,185,129,0.12)">
+              <svg class="w-10 h-10 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
+              </svg>
+            </div>
+            <h3 class="text-xl font-bold text-white mb-2">Report Submitted</h3>
+            <p class="text-slate-400 text-sm mb-5">
+              Your <strong class="text-slate-200">${esc(form?.formTitle || 'incident report')}</strong>
+              has been successfully submitted and logged.
+            </p>
+            <div class="inline-block px-6 py-3 rounded-xl font-mono font-bold text-xl tracking-wider"
+                 style="background:rgba(16,185,129,0.1);border:1.5px solid #10b981;color:#10b981">
+              ${esc(ref)}
+            </div>
+            <p class="text-slate-600 text-xs mt-3 mb-5">Reference number — keep this for your records</p>
+            <div class="flex gap-2 justify-center">
+              <button onclick="currentPageIndex=0;renderFormsView()"
+                      class="px-4 py-2 text-sm bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition-colors">
+                ← Back to form
+              </button>
+              <button onclick="switchTab('conversation')"
+                      class="px-4 py-2 text-sm bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg transition-colors">
+                View conversation
+              </button>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    // ── User message (right-aligned orange bubble) ────────────────────────────
+    function appendUserMessage(message) {
+      document.getElementById('chat-placeholder')?.remove();
+      const el = document.createElement('div');
+      el.className = 'chat-msg flex justify-end';
+      el.innerHTML = `
+        <div style="max-width:70%">
+          <div class="text-xs font-semibold text-right mb-1.5" style="color:#F06C00">You</div>
+          <div class="px-4 py-3 rounded-2xl rounded-tr-none text-white text-sm leading-relaxed"
+               style="background:#F06C00">
+            ${esc(message)}
+          </div>
+        </div>`;
+      chat(el);
+    }
+
+    // ── Clear chat + reset state ──────────────────────────────────────────────
+    function clearChat(resetInputBar = true) {
+      if (activeStream) { activeStream.close(); activeStream = null; }
+      isRunning       = false;
+      pendingConvId   = null;
+      agentPanelState = {};
+
+      if (selectedPattern) {
+        selectedPattern._inputMode  = 'idle';
+        selectedPattern._lastPrompt = selectedPattern._lastPrompt || selectedPattern.defaultPrompt;
+        delete chatCache[selectedPattern.id];
+      }
+
+      document.getElementById('chat-area').innerHTML = `
+        <div id="chat-placeholder"
+             class="flex items-center justify-center h-full text-slate-600 pointer-events-none select-none">
+          <div class="text-center">
+            <div class="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4"
+                 style="background:rgba(240,108,0,0.1)">
+              <span class="text-3xl font-black" style="color:#F06C00">S</span>
+            </div>
+            <p class="text-lg font-medium mb-1">Agent activity will appear here</p>
+            <p class="text-sm">Click Run Demo to start the pattern</p>
+          </div>
+        </div>`;
+
+      if (resetInputBar && selectedPattern) renderInputBar('idle');
+    }
+
+    function appendSysNote(msg) {
+      document.getElementById('chat-placeholder')?.remove();
+      const el = document.createElement('div');
+      el.className = 'flex items-center gap-3 py-0.5';
+      el.innerHTML = `
+        <div class="flex-1 h-px bg-slate-800"></div>
+        <span class="text-xs text-slate-500 italic px-2">${esc(msg)}</span>
+        <div class="flex-1 h-px bg-slate-800"></div>`;
+      chat(el);
+    }
+
+    // ── Tiny helpers ──────────────────────────────────────────────────────────
+
+    function avatar(name, colour) {
+      const initial = (name || '?')[0].toUpperCase();
+      return `<div class="w-7 h-7 rounded-full flex-shrink-0 flex items-center justify-center
+                           text-xs font-bold text-white mt-0.5" style="background:${colour}">${initial}</div>`;
+    }
+
+    function agentRow(id) {
+      const el = document.createElement('div');
+      el.className = 'chat-msg flex items-start gap-2.5';
+      if (id) el.id = id;
+      return el;
+    }
+
+    function chat(el) {
+      document.getElementById('chat-area').appendChild(el);
+      autoScroll();
+    }
+
+    function autoScroll() {
+      const a = document.getElementById('chat-area');
+      a.scrollTop = a.scrollHeight;
+    }
+
+    function sid(name)  { return String(name).replace(/[^a-z0-9]/gi, '-').toLowerCase(); }
+
+    function esc(s) {
+      return String(s)
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function mdToHtml(raw) {
+      let h = raw.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      h = h.replace(/\*\*([^*\n]+)\*\*/g, '<strong style="color:inherit;font-weight:600">$1</strong>');
+      h = h.replace(/^#{1,3}\s+(.+)$/gm, '<strong style="color:inherit;font-weight:600">$1</strong>');
+      h = h.replace(/\n/g, '<br>');
+      return h;
     }
 
     // ── Modal ─────────────────────────────────────────────────────────────────
     function showModal(id) {
       const p = patterns.find(p => p.id === id);
       if (!p) return;
-
       document.getElementById('modal-title').textContent    = `${p.icon} ${p.name} Pattern`;
       document.getElementById('modal-subtitle').textContent  = p.shortDescription;
       document.getElementById('modal-detail').textContent   = p.detailedDescription;
-
       document.getElementById('modal-pros').innerHTML =
-        p.pros.map(pro => `<li class="flex gap-1"><span class="text-emerald-400 mt-0.5">•</span>${escapeHtml(pro)}</li>`).join('');
+        p.pros.map(x=>`<li class="flex gap-1"><span class="text-emerald-400 mt-0.5">•</span>${esc(x)}</li>`).join('');
       document.getElementById('modal-cons').innerHTML =
-        p.cons.map(con => `<li class="flex gap-1"><span class="text-red-400 mt-0.5">•</span>${escapeHtml(con)}</li>`).join('');
+        p.cons.map(x=>`<li class="flex gap-1"><span class="text-red-400 mt-0.5">•</span>${esc(x)}</li>`).join('');
       document.getElementById('modal-agents').innerHTML =
-        p.agentsInvolved.map(a => `<span class="text-xs bg-slate-800 text-slate-300 px-2 py-1 rounded-full">${escapeHtml(a)}</span>`).join('');
-
+        p.agentsInvolved.map(a=>`<span class="text-xs bg-slate-800 text-slate-300 px-2 py-1 rounded-full">${esc(a)}</span>`).join('');
       document.getElementById('info-modal').classList.remove('hidden');
     }
 
-    function closeModal() {
-      document.getElementById('info-modal').classList.add('hidden');
-    }
-
-    document.getElementById('info-modal').addEventListener('click', (e) => {
+    function closeModal() { document.getElementById('info-modal').classList.add('hidden'); }
+    document.getElementById('info-modal').addEventListener('click', e => {
       if (e.target === document.getElementById('info-modal')) closeModal();
     });
-
-    // ── Helpers ───────────────────────────────────────────────────────────────
-    function clearStream() {
-      if (activeStream) { activeStream.close(); activeStream = null; }
-      const area = document.getElementById('stream-area');
-      area.innerHTML = `
-        <div id="stream-placeholder" class="flex items-center justify-center h-full text-slate-600">
-          <div class="text-center">
-            <p class="text-4xl mb-3">🤖</p>
-            <p class="text-lg font-medium mb-1">Agent activity will appear here</p>
-            <p class="text-sm">Click Run Demo to start the pattern</p>
-          </div>
-        </div>`;
-      if (isRunning) setRunning(false);
-    }
-
-    function setRunning(running) {
-      isRunning = running;
-      const btn   = document.getElementById('run-btn');
-      const icon  = document.getElementById('run-icon');
-      const label = document.getElementById('run-label');
-      btn.disabled = running;
-      if (running) {
-        icon.textContent  = '⏳';
-        label.textContent = 'Running...';
-      } else {
-        icon.textContent  = '▶';
-        label.textContent = 'Run Demo';
-      }
-    }
-
-    function autoScroll() {
-      const area = document.getElementById('stream-area');
-      area.scrollTop = area.scrollHeight;
-    }
-
-    function sanitiseId(name) {
-      return name.replace(/[^a-z0-9]/gi, '-').toLowerCase();
-    }
-
-    function escapeHtml(str) {
-      return str
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-    }
   </script>
 </body>
 </html>

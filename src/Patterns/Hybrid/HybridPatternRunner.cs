@@ -1,9 +1,9 @@
 using System.Runtime.CompilerServices;
 using System.Text;
-using System.Text.RegularExpressions;
 using System.Threading.Channels;
 using Agents;
 using Core.Infrastructure;
+using Core.Infrastructure.Mcp;
 using Core.Interfaces;
 using Core.Models;
 using Microsoft.SemanticKernel;
@@ -11,47 +11,30 @@ using Microsoft.SemanticKernel;
 namespace Patterns.Hybrid;
 
 /// <summary>
-/// PATTERN 6 — RECOMMENDED HYBRID (Classify → Selective Concurrent Fan-out → Synthesise)
+/// PATTERN 6 — RECOMMENDED HYBRID (Classify → Clarify? → Selective Concurrent Fan-out → Synthesise)
 ///
-/// This is the recommended production pattern for a multi-agent architecture.
-/// It combines three patterns in sequence, using each where it's most appropriate:
+/// This is the pattern recommended for the Assist platform's Client → Gateway architecture.
 ///
-///   Phase 1  [Handoff-inspired]   A Gateway Classifier decides WHICH specialists are
-///                                 needed and crafts a TAILORED question for each.
+///   Phase 1  [Classify]      Gateway Classifier reads the natural language input.
+///                            If it is out-of-scope it emits a soft rejection.
+///                            If critical details are missing it emits a ClarificationRequest,
+///                            pauses the stream, and waits for the user to respond.
+///                            Once it has enough context it selects the relevant specialists
+///                            and crafts a tailored question for each.
 ///
-///   Phase 2  [Concurrent]         Only the relevant specialist(s) run in parallel.
-///                                 A pure safety query invokes only the Safety agent;
-///                                 a multi-domain query fans out to 2–3 agents.
+///   Phase 2  [Fan-out]       Only the selected specialists run — in parallel.
+///                            Each specialist appends a FORM_FIELDS block to its response,
+///                            which is parsed into a FilledForm and emitted as a FormFilled event.
 ///
-///   Phase 3  [Sequential]         The Coordinator synthesises all findings into a
-///                                 single, prioritised response for the user.
-///
-/// WHY THIS BEATS RUNNING ALL THREE AGENTS EVERY TIME:
-///   - Efficiency:     A "wet floor" query doesn't need Security or Facilities.
-///                     We save 2 unnecessary LLM calls.
-///   - Focus:          Each specialist receives a question tailored to their domain,
-///                     not a raw prompt that makes them guess what they're answering.
-///   - Speed:          Fewer agents = faster total time for simple queries;
-///                     complex queries still benefit from full concurrency.
-///   - Transparency:   The classification step is visible — the user can see WHY
-///                     each specialist was or wasn't involved.
-///
-/// ✅ PROS:
-///   - Intelligent routing — only relevant specialists are invoked
-///   - Each specialist receives a focused, domain-specific question
-///   - Scales: 1 domain = 1 agent; 3 domains = 3 parallel agents
-///   - Maps directly to the Gateway pattern in a multi-agent architecture
-///   - Good balance of speed, cost, and response quality
-///
-/// ❌ CONS:
-///   - Classifier adds one extra LLM call at the start
-///   - If the classifier misclassifies, a relevant specialist is missed
-///   - Slightly more complex than running all agents blindly every time
-///   - Tailored questions require the classifier to be prompt-engineered well
+///   Phase 3  [Synthesise]    Coordinator merges all findings into a structured summary card:
+///                            executive summary, severity, immediate actions, 24h actions,
+///                            and regulatory obligations.
 /// </summary>
 public sealed class HybridPatternRunner : IPatternRunner
 {
-    private readonly Kernel _kernel;
+    private readonly Kernel            _kernel;
+    private readonly ConversationStore _store;
+    private readonly IMcpFormClient    _mcpClient;
 
     public string PatternId => "hybrid";
 
@@ -59,203 +42,548 @@ public sealed class HybridPatternRunner : IPatternRunner
         Id:                  "hybrid",
         Name:                "Hybrid (Recommended)",
         Icon:                "🎯",
-        ShortDescription:    "Classify → selective concurrent fan-out → synthesise",
-        DetailedDescription: "The recommended production pattern. A Classifier Agent first determines which specialists are genuinely needed and crafts a tailored question for each. Only relevant agents run — in parallel. The Coordinator synthesises results. This combines the intelligence of Handoff, the speed of Concurrent, and the clarity of Sequential into a single cohesive flow.",
-        ScenarioTitle:       "Intelligent Gateway — Multi-Domain Incident",
-        ScenarioDescription: "The Gateway Classifier analyses the prompt, selects only the relevant specialists (1–3), tailors a focused question for each, fans them out in parallel, and synthesises a unified response. Try a pure safety query, a security+facilities query, or a complex multi-domain incident to see the classifier dynamically adjust.",
-        DefaultPrompt:       "A forklift truck has clipped a racking bay in the warehouse, causing three pallets of stock to fall. One colleague has a suspected broken arm. The racking unit looks structurally unstable and may collapse further. The CCTV covering that zone has been offline for two days.",
-        Pros:                ["Only relevant specialists invoked — efficient & focused", "Tailored domain questions = higher quality responses", "Scales naturally: 1 to 3 parallel agents as needed", "Maps directly to the Gateway pattern in any multi-agent system", "Classification step visible in UI — fully transparent"],
-        Cons:                ["One extra LLM call for classification upfront", "Classifier errors can cause a relevant specialist to be missed", "Prompt engineering the classifier well is critical", "Slightly more complex than naive 'run all agents'"],
-        AgentsInvolved:      ["Gateway Classifier Agent", "Safety Specialist (if needed)", "Security Specialist (if needed)", "Facilities Specialist (if needed)", "Coordinator (synthesis)"]
+        ShortDescription:    "Classify → clarify if needed → selective concurrent fan-out → synthesise",
+        DetailedDescription: "The recommended pattern for the Assist Gateway. A single Coordinator Agent acts as the intelligent bridge between the user and the specialists — it first checks whether enough information exists to route accurately, asks one clarifying question if not, selects only the relevant specialists, crafts a tailored question for each, and finally synthesises all their findings into one prioritised response. The same agent that decided what to ask is the same agent that reads and weighs the answers.",
+        ScenarioTitle:       "Intelligent Gateway — Assist Platform",
+        ScenarioDescription: "Try a vague prompt like 'someone got hurt' to trigger a clarifying question, or a detailed multi-domain incident to see the full fan-out. The Coordinator handles both routing and synthesis — one agent, two responsibilities. Expand the 🧠 Reasoning blocks to see every decision it made.",
+        DefaultPrompt:       "Someone got hurt near the warehouse.",
+        Pros:                ["One Coordinator handles both routing AND synthesis — simpler mental model", "Asks for missing info before routing — no wasted agent calls", "Reasoning visible at every decision point", "Only relevant specialists invoked — efficient & focused", "Parallel execution — speed scales with incident complexity"],
+        Cons:                ["One extra LLM call for routing upfront", "Clarification adds a round-trip if input is vague", "Coordinator prompt needs ongoing maintenance as new incident types emerge", "Slightly more complex than running all agents blindly"],
+        AgentsInvolved:      ["Coordinator (routing + synthesis)", "Safety Specialist (if needed)", "Security Specialist (if needed)", "Facilities Specialist (if needed)"]
     );
 
-    public HybridPatternRunner(Kernel kernel)
+    public HybridPatternRunner(Kernel kernel, ConversationStore store, IMcpFormClient mcpClient)
     {
-        _kernel = kernel;
+        _kernel    = kernel;
+        _store     = store;
+        _mcpClient = mcpClient;
     }
 
     public async IAsyncEnumerable<AgentEvent> RunAsync(
         string userPrompt,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        yield return AgentEvent.SystemNote("▶ Starting Hybrid Pattern — Gateway classifying prompt...");
-
-        var classifier = new GatewayClassifierAgent(_kernel);
-        var safety     = new SafetySpecialistAgent(_kernel);
-        var security   = new SecuritySpecialistAgent(_kernel);
-        var facilities = new FacilitiesSpecialistAgent(_kernel);
+        // Single coordinator — acts as both the routing gateway and the final synthesiser
         var coordinator = new CoordinatorAgent(_kernel);
-
-        var allAgents = new Dictionary<string, AssistAgent>(StringComparer.OrdinalIgnoreCase)
+        var allAgents   = new Dictionary<string, AssistAgent>(StringComparer.OrdinalIgnoreCase)
         {
-            ["safety"]     = safety,
-            ["security"]   = security,
-            ["facilities"] = facilities
+            ["safety"]     = new SafetySpecialistAgent(_kernel),
+            ["security"]   = new SecuritySpecialistAgent(_kernel),
+            ["facilities"] = new FacilitiesSpecialistAgent(_kernel)
         };
 
-        // ── Phase 1: Gateway Classifier ──────────────────────────────────────────
-        yield return AgentEvent.Thinking(classifier.Name, classifier.Colour);
+        // ── Phase 1: Coordinator — routing decision ───────────────────────────────
+        yield return AgentEvent.SystemNote("▶ Coordinator analysing prompt...");
+        yield return AgentEvent.Thinking(coordinator.Name, coordinator.Colour);
 
-        var classificationPrompt = $"""
-            Analyse this workplace prompt and determine which specialist(s) should handle it.
+        var classificationResult = await RunClassifierAsync(coordinator, userPrompt, cancellationToken);
 
-            PROMPT:
-            {userPrompt}
+        // ── Soft reject — prompt is clearly not a workplace incident ─────────────
+        // Done with lightweight keyword matching (no LLM call) to avoid small-model
+        // misclassification. Any mention of injury/damage/security/facilities bypasses this.
+        if (IsObviouslyOutOfScope(userPrompt))
+        {
+            yield return AgentEvent.Response(
+                coordinator.Name, coordinator.Colour,
+                "I'm here to help report workplace incidents at Sainsbury's — injuries, " +
+                "security events, or facilities issues. Could you describe what happened at your location?");
 
-            Available specialists:
-            - safety:     Injuries, accidents, near-misses, hazards, RIDDOR, HSE compliance, PPE
-            - security:   Unauthorised access, CCTV, theft, threats, access control breaches
-            - facilities: Structural damage, racking, equipment, utilities, building integrity, plant
+            yield return AgentEvent.Complete("Out of scope — prompt redirected gracefully.");
+            yield break;
+        }
 
-            For EACH specialist that is relevant, write a tailored question they should answer.
-            If a specialist is NOT relevant to this prompt, do not include them.
+        // ── Multi-turn clarification loop ────────────────────────────────────────
+        // The coordinator can ask up to MaxClarifications questions before it must route.
+        // Each answer is appended to userPrompt as a Q&A pair so the full context is
+        // available when the classifier re-runs.
+        const int MaxClarifications = 3;
+        for (var round = 0; round < MaxClarifications && classificationResult.NeedsClarification; round++)
+        {
+            var conversationId = _store.Create();
 
-            Respond in EXACTLY this format (include only relevant specialists):
-            CLASSIFICATION_REASONING: [1-2 sentences explaining your routing decision]
-            SELECTED_AGENTS: [comma-separated list from: safety, security, facilities]
-            SAFETY_QUESTION: [specific question for safety specialist, or SKIP]
-            SECURITY_QUESTION: [specific question for security specialist, or SKIP]
-            FACILITIES_QUESTION: [specific question for facilities specialist, or SKIP]
-            """;
+            if (round == 0)
+            {
+                yield return AgentEvent.Reasoning(
+                    coordinator.Name, coordinator.Colour,
+                    "Input is too vague to route accurately — gathering more detail before selecting specialists.");
+            }
 
-        var classificationResponse = await classifier.GetResponseAsync(classificationPrompt, cancellationToken);
-        yield return AgentEvent.Response(classifier.Name, classifier.Colour, classificationResponse);
+            yield return AgentEvent.ClarificationNeeded(
+                coordinator.Name, coordinator.Colour,
+                classificationResult.ClarificationQuestion!, conversationId);
 
-        // ── Parse classification ──────────────────────────────────────────────────
-        var selected = ParseSelectedAgents(classificationResponse);
-        var tailoredQuestions = ParseTailoredQuestions(classificationResponse, userPrompt);
+            // C# disallows yield inside catch — capture error then yield after
+            string? clarification      = null;
+            string? clarificationError = null;
+            try
+            {
+                clarification = await _store.WaitForResponseAsync(conversationId, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                clarificationError = "Session timed out waiting for your response.";
+            }
 
+            if (clarificationError is not null)
+            {
+                yield return AgentEvent.Error(clarificationError);
+                yield break;
+            }
+
+            // Accumulate the Q&A so the next classifier call has full context
+            userPrompt =
+                $"{userPrompt}" +
+                $"\n\nCoordinator asked: {classificationResult.ClarificationQuestion}" +
+                $"\nUser replied: {clarification!}";
+
+            var isLastRound = round == MaxClarifications - 1;
+            yield return AgentEvent.SystemNote(
+                isLastRound
+                    ? "Proceeding with available information..."
+                    : "Got it — checking if anything else is needed...");
+            yield return AgentEvent.Thinking(coordinator.Name, coordinator.Colour);
+
+            classificationResult = await RunClassifierAsync(coordinator, userPrompt, cancellationToken);
+        }
+
+        // ── Emit the routing reasoning ────────────────────────────────────────────
+        if (!string.IsNullOrWhiteSpace(classificationResult.Reasoning))
+        {
+            yield return AgentEvent.Reasoning(
+                coordinator.Name, coordinator.Colour, classificationResult.Reasoning);
+        }
+
+        // ── Validate we have something to work with ───────────────────────────────
+        var selected = classificationResult.SelectedAgents;
         if (selected.Count == 0)
         {
-            yield return AgentEvent.SystemNote("⚠️ Classifier could not identify relevant specialists. Defaulting to Safety.");
-            selected.Add("safety");
-            tailoredQuestions["safety"] = userPrompt;
+            // Coordinator failed to identify domains — safer to ask everyone than to guess wrong
+            yield return AgentEvent.SystemNote("⚠️ Coordinator could not determine routing — invoking all specialists to ensure nothing is missed.");
+            selected.AddRange(["safety", "security", "facilities"]);
+            foreach (var key in selected)
+                classificationResult.TailoredQuestions.TryAdd(key, userPrompt);
         }
 
-        var agentNames = string.Join(", ", selected.Select(s => s.ToUpperInvariant()));
+        var agentNames   = string.Join(", ", selected.Select(s => s[..1].ToUpper() + s[1..]));
+        var skippedCount = 3 - selected.Count;
         yield return AgentEvent.SystemNote(
-            $"Classifier selected {selected.Count} specialist(s): {agentNames}. " +
-            $"{3 - selected.Count} specialist(s) not needed — skipped.");
+            $"Routing to: {agentNames}." +
+            (skippedCount > 0 ? $" {skippedCount} specialist(s) not relevant — skipped." : ""));
 
         // ── Phase 2: Selective Concurrent Fan-out ────────────────────────────────
-        if (selected.Count == 1)
-        {
-            yield return AgentEvent.SystemNote($"Single specialist needed — no fan-out overhead.");
-        }
-        else
-        {
+        if (selected.Count > 1)
             yield return AgentEvent.SystemNote($"{selected.Count} specialists running concurrently...");
-        }
 
-        var channel = Channel.CreateUnbounded<AgentEvent>(
+        var channel    = Channel.CreateUnbounded<AgentEvent>(
             new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
-
-        // Collect full text results for synthesis
-        var results = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var results    = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var resultLock = new object();
 
-        // Launch only selected agents — each gets their tailored question
         var producerTasks = selected
             .Where(key => allAgents.ContainsKey(key))
             .Select(key => Task.Run(async () =>
             {
-                var agent = allAgents[key];
-                var question = tailoredQuestions.TryGetValue(key, out var q) ? q : userPrompt;
+                var agent  = allAgents[key];
+                var prompt = BuildSpecialistPrompt(userPrompt, classificationResult, key);
+                var sb     = new StringBuilder();
 
-                // Get full response for synthesis
-                var fullResponse = await agent.GetResponseAsync(question, cancellationToken);
-                lock (resultLock) { results[key] = fullResponse; }
-
-                // Stream events to the channel
-                await foreach (var evt in agent.InvokeStreamingAsync(question, cancellationToken))
+                // Single streaming call — accumulate text for parsing while events flow to the UI
+                await foreach (var evt in agent.InvokeStreamingAsync(prompt, cancellationToken))
+                {
+                    if (evt.EventType == AgentEventType.AgentResponse)
+                        sb.Append(evt.Content);
                     await channel.Writer.WriteAsync(evt, cancellationToken);
+                }
+
+                lock (resultLock) { results[key] = sb.ToString(); }
 
             }, cancellationToken))
             .ToArray();
 
         _ = Task.WhenAll(producerTasks).ContinueWith(
-            _ => channel.Writer.Complete(),
-            CancellationToken.None);
+            _ => channel.Writer.Complete(), CancellationToken.None);
 
-        // Stream all interleaved agent events to the caller
         await foreach (var evt in channel.Reader.ReadAllAsync(cancellationToken))
             yield return evt;
 
         await Task.WhenAll(producerTasks);
 
+        // ── Parse and emit form fields from each specialist response ─────────────
+        // Strategy: try the MCP tool call first (when a live server is connected),
+        // then fall back to parsing the FORM_FIELDS block from the specialist's text.
+        // Currently the MCP client is dormant, so every call returns null and we
+        // always land on the text-extraction fallback — no behaviour change today.
+        var filledForms = new List<FilledForm>();
+        foreach (var domain in selected.Where(k => results.ContainsKey(k)))
+        {
+            FilledForm? form = null;
+
+            // 1. MCP tool call (only attempted when a live server is available)
+            if (_mcpClient.IsConnected)
+            {
+                form = await _mcpClient.TryFillFormAsync(domain, userPrompt, cancellationToken);
+            }
+
+            // 2. Structured text extraction fallback
+            form ??= FormSchemaRegistry.ParseFormFields(results[domain], domain);
+
+            if (form is not null)
+            {
+                filledForms.Add(form);
+                yield return AgentEvent.FormFilledEvent(coordinator.Name, coordinator.Colour, form);
+            }
+        }
+
         // ── Phase 3: Coordinator Synthesis ───────────────────────────────────────
-        yield return AgentEvent.SystemNote("All selected specialists complete — Coordinator synthesising...");
+        yield return AgentEvent.SystemNote("All specialists complete — Coordinator synthesising...");
+        yield return AgentEvent.Thinking(coordinator.Name, coordinator.Colour);
 
-        var synthesisPrompt = BuildSynthesisPrompt(userPrompt, results);
-        await foreach (var evt in coordinator.InvokeStreamingAsync(synthesisPrompt, cancellationToken))
-            yield return evt;
+        // Strip FORM_FIELDS blocks before sending to coordinator — it doesn't need the raw fields
+        var strippedResults = results.ToDictionary(
+            kvp => kvp.Key,
+            kvp => FormSchemaRegistry.StripFormFields(kvp.Value),
+            StringComparer.OrdinalIgnoreCase);
 
-        var skippedCount = 3 - selected.Count;
-        var skippedNote = skippedCount > 0
-            ? $" ({skippedCount} specialist(s) correctly skipped as not relevant)"
-            : "";
+        var synthesisPrompt = BuildSynthesisPrompt(userPrompt, strippedResults, selected);
+        var synthesisText   = await coordinator.GetResponseAsync(synthesisPrompt, cancellationToken);
+        var summaryData     = ParseStructuredSummary(synthesisText);
+
+        yield return AgentEvent.SummaryCard(coordinator.Name, coordinator.Colour, summaryData);
 
         yield return AgentEvent.Complete(
-            $"✅ Hybrid pattern complete — {selected.Count} specialist(s) invoked{skippedNote}, " +
-            $"classified → concurrent → synthesised.");
+            $"Complete — {selected.Count} specialist(s) invoked, {skippedCount} skipped." +
+            (filledForms.Count > 0 ? $" {filledForms.Count} form(s) pre-filled." : "") +
+            " Classified → fan-out → synthesised.");
     }
 
-    // ── Parsing helpers ───────────────────────────────────────────────────────
+    // ── Scope guard — keyword-based, no LLM call ─────────────────────────────
+    // Only fires when there are ZERO incident-related words in the prompt.
+    // This avoids false positives from a small model misclassifying real incidents.
 
-    private static List<string> ParseSelectedAgents(string response)
+    private static readonly string[] IncidentKeywords =
+    [
+        "hurt", "injur", "accident", "fell", "fall", "slip", "trip", "burn", "cut", "bleed",
+        "broke", "broken", "fracture", "pain", "medical", "first aid", "ambulance", "hospital",
+        "fire", "smoke", "flood", "leak", "spill", "chemical", "gas", "explosion",
+        "cctv", "camera", "security", "theft", "stolen", "break-in", "intruder", "threat",
+        "violent", "attack", "suspicious", "unauthorised", "access", "lock", "alarm",
+        "damage", "broken", "structural", "equipment", "power", "electrical", "water",
+        "roof", "ceiling", "floor", "door", "gate", "racking", "shelf", "shelving",
+        "warehouse", "store", "depot", "site", "incident", "report", "colleague",
+        "customer", "contractor", "near miss", "hazard", "risk", "unsafe"
+    ];
+
+    private static bool IsObviouslyOutOfScope(string prompt)
     {
-        var result = new List<string>();
-        foreach (var line in response.Split('\n'))
+        var lower = prompt.ToLowerInvariant();
+        // If any incident-related keyword is present, it's in scope
+        if (IncidentKeywords.Any(kw => lower.Contains(kw))) return false;
+        // Only reject very short prompts with no incident language at all
+        return prompt.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length <= 8;
+    }
+
+    // ── Classifier helper ─────────────────────────────────────────────────────
+
+    private static async Task<ClassificationResult> RunClassifierAsync(
+        AssistAgent coordinator,
+        string prompt,
+        CancellationToken ct)
+    {
+        var classificationPrompt = $"""
+            You are routing a workplace incident report to the correct specialist agents.
+            Analyse the incident and follow the steps below precisely.
+
+            INCIDENT:
+            {prompt}
+
+            SPECIALIST DOMAINS:
+            - safety:     Injury, physical harm, first aid, RIDDOR, HSE, near-miss, PPE, fire/chemical exposure
+            - security:   Break-in, theft, CCTV issues, unauthorised access, threats, violence, suspicious persons
+            - facilities: Building/structural damage, equipment failure, utilities, racking, mechanical faults
+
+            STEP 1 — CLARIFICATION (only if genuinely needed):
+            Only ask a clarifying question if you truly cannot identify ANY domain from the description.
+            If the incident mentions at least one domain keyword, skip to Step 2 immediately.
+            If clarification IS needed, respond with ONLY this line:
+            NEEDS_CLARIFICATION: <one short, friendly question>
+
+            STEP 2 — ROUTING (use this exact format, all five lines required):
+            CLASSIFICATION_REASONING: <1-2 sentences on which domains are involved and why>
+            SELECTED_AGENTS: <comma-separated from: safety, security, facilities>
+            SAFETY_QUESTION: <focused question for safety specialist, or SKIP>
+            SECURITY_QUESTION: <focused question for security specialist, or SKIP>
+            FACILITIES_QUESTION: <focused question for facilities specialist, or SKIP>
+
+            ROUTING RULES:
+            • Any mention of injury, hurt, pain, or medical → safety must be selected.
+            • Any mention of CCTV, break-in, theft, or intruder → security must be selected.
+            • Any mention of building, equipment, or structural damage → facilities must be selected.
+            • If in doubt whether a domain applies, include it.
+            • Most incidents touch more than one domain — be inclusive.
+
+            Example for "colleague injured, CCTV offline, break-in":
+            CLASSIFICATION_REASONING: Injured colleague → safety; break-in and CCTV → security.
+            SELECTED_AGENTS: safety, security
+            SAFETY_QUESTION: What injuries did the colleague sustain and has first aid been given?
+            SECURITY_QUESTION: What evidence is there of the break-in and what is the CCTV status?
+            FACILITIES_QUESTION: SKIP
+            """;
+
+        var response = await coordinator.GetResponseAsync(classificationPrompt, ct);
+        return ParseClassificationResponse(response, prompt);
+    }
+
+    // ── Response parsing ──────────────────────────────────────────────────────
+
+    private static ClassificationResult ParseClassificationResponse(string response, string fallbackPrompt)
+    {
+        var lines = response.Split('\n');
+
+        // Check if clarification is needed
+        foreach (var line in lines)
         {
-            if (!line.StartsWith("SELECTED_AGENTS:", StringComparison.OrdinalIgnoreCase)) continue;
-            var value = line.Substring("SELECTED_AGENTS:".Length).Trim();
-            foreach (var part in value.Split(','))
+            if (line.StartsWith("NEEDS_CLARIFICATION:", StringComparison.OrdinalIgnoreCase))
             {
-                var key = part.Trim().ToLowerInvariant().TrimEnd('.');
-                if (key is "safety" or "security" or "facilities")
-                    result.Add(key);
+                var question = line["NEEDS_CLARIFICATION:".Length..].Trim();
+                return new ClassificationResult { NeedsClarification = true, ClarificationQuestion = question };
             }
-            break;
         }
-        return result;
-    }
 
-    private static Dictionary<string, string> ParseTailoredQuestions(
-        string response, string fallbackPrompt)
-    {
-        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var lineMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        // Parse the full routing response
+        var result = new ClassificationResult();
+
+        var domainMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["SAFETY_QUESTION"]     = "safety",
             ["SECURITY_QUESTION"]   = "security",
             ["FACILITIES_QUESTION"] = "facilities"
         };
 
-        foreach (var line in response.Split('\n'))
+        foreach (var line in lines)
         {
-            foreach (var (prefix, domain) in lineMap)
+            if (line.StartsWith("CLASSIFICATION_REASONING:", StringComparison.OrdinalIgnoreCase))
             {
-                if (!line.StartsWith($"{prefix}:", StringComparison.OrdinalIgnoreCase)) continue;
-                var question = line.Substring(prefix.Length + 1).Trim();
-                if (!string.IsNullOrWhiteSpace(question) &&
-                    !question.Equals("SKIP", StringComparison.OrdinalIgnoreCase))
+                result.Reasoning = line["CLASSIFICATION_REASONING:".Length..].Trim();
+            }
+            else if (line.StartsWith("SELECTED_AGENTS:", StringComparison.OrdinalIgnoreCase))
+            {
+                var value = line["SELECTED_AGENTS:".Length..].Trim();
+                foreach (var part in value.Split(','))
                 {
-                    map[domain] = question;
+                    var key = part.Trim().ToLowerInvariant().TrimEnd('.');
+                    if (key is "safety" or "security" or "facilities")
+                        result.SelectedAgents.Add(key);
+                }
+            }
+            else
+            {
+                foreach (var (prefix, domain) in domainMap)
+                {
+                    if (!line.StartsWith($"{prefix}:", StringComparison.OrdinalIgnoreCase)) continue;
+                    var question = line[(prefix.Length + 1)..].Trim();
+                    if (!string.IsNullOrWhiteSpace(question) &&
+                        !question.Equals("SKIP", StringComparison.OrdinalIgnoreCase))
+                    {
+                        result.TailoredQuestions[domain] = question;
+                    }
                 }
             }
         }
 
-        return map;
+        // Recovery: if the model answered domain questions but forgot SELECTED_AGENTS,
+        // infer selection from whichever questions are present
+        if (result.SelectedAgents.Count == 0 && result.TailoredQuestions.Count > 0)
+        {
+            foreach (var domain in result.TailoredQuestions.Keys)
+                result.SelectedAgents.Add(domain);
+        }
+
+        return result;
     }
+
+    // ── Structured summary parser ─────────────────────────────────────────────
+
+    private static StructuredSummaryData ParseStructuredSummary(string response)
+    {
+        var executiveSummary = "";
+        var severity         = "Medium";
+        var immediateActions = new List<string>();
+        var actions24h       = new List<string>();
+        string? regulatoryNote = null;
+        string? currentSection = null;
+
+        foreach (var line in response.Split('\n'))
+        {
+            var trimmed = line.Trim();
+            if (string.IsNullOrEmpty(trimmed)) continue;
+
+            if (trimmed.StartsWith("EXECUTIVE_SUMMARY:", StringComparison.OrdinalIgnoreCase))
+            {
+                executiveSummary = trimmed["EXECUTIVE_SUMMARY:".Length..].Trim();
+                currentSection   = "exec";
+            }
+            else if (trimmed.StartsWith("SEVERITY:", StringComparison.OrdinalIgnoreCase))
+            {
+                severity       = trimmed["SEVERITY:".Length..].Trim();
+                currentSection = null;
+            }
+            else if (trimmed.StartsWith("IMMEDIATE_ACTIONS:", StringComparison.OrdinalIgnoreCase))
+            {
+                currentSection = "immediate";
+            }
+            else if (trimmed.StartsWith("24H_ACTIONS:", StringComparison.OrdinalIgnoreCase))
+            {
+                currentSection = "24h";
+            }
+            else if (trimmed.StartsWith("REGULATORY:", StringComparison.OrdinalIgnoreCase))
+            {
+                regulatoryNote = trimmed["REGULATORY:".Length..].Trim();
+                currentSection = null;
+            }
+            else if (trimmed.StartsWith("- "))
+            {
+                var item = trimmed[2..].Trim();
+                if (currentSection == "immediate") immediateActions.Add(item);
+                else if (currentSection == "24h")  actions24h.Add(item);
+            }
+            else if (currentSection == "exec")
+            {
+                // Multi-line executive summary continuation
+                executiveSummary = executiveSummary.TrimEnd() + " " + trimmed;
+            }
+        }
+
+        // Fallback when the model didn't follow the format
+        if (string.IsNullOrEmpty(executiveSummary))
+        {
+            executiveSummary = response.Split('\n')
+                .FirstOrDefault(l =>
+                    !string.IsNullOrWhiteSpace(l) &&
+                    !l.TrimStart().StartsWith("SEVERITY:", StringComparison.OrdinalIgnoreCase))
+                ?? "Incident assessed — see specialist findings for full details.";
+        }
+
+        // Normalise severity to known values
+        severity = severity.Trim().ToUpperInvariant() switch
+        {
+            "LOW"      => "Low",
+            "MEDIUM"   => "Medium",
+            "HIGH"     => "High",
+            "CRITICAL" => "Critical",
+            _          => "Medium"
+        };
+
+        if (string.IsNullOrWhiteSpace(regulatoryNote) ||
+            regulatoryNote.Equals("none identified", StringComparison.OrdinalIgnoreCase) ||
+            regulatoryNote.Equals("n/a", StringComparison.OrdinalIgnoreCase))
+        {
+            regulatoryNote = null;
+        }
+
+        return new StructuredSummaryData
+        {
+            ExecutiveSummary = executiveSummary,
+            Severity         = severity,
+            ImmediateActions = immediateActions,
+            Actions24h       = actions24h,
+            RegulatoryNote   = regulatoryNote
+        };
+    }
+
+    // ── Specialist prompt builder ─────────────────────────────────────────────
+    // Always gives each specialist the full original incident PLUS their tailored focus.
+    // The FORM_FIELDS requirement is injected here (user-turn) rather than in the system prompt
+    // because small models (Llama 3.2 3B) follow user-message instructions far more reliably.
+
+    private static string BuildSpecialistPrompt(
+        string originalPrompt,
+        ClassificationResult classification,
+        string domain)
+    {
+        var focus        = classification.TailoredQuestions.TryGetValue(domain, out var q) ? q : null;
+        var formFields   = GetFormFieldsBlock(domain);
+
+        var incidentSection = focus is null
+            ? originalPrompt
+            : $"""
+              INCIDENT:
+              {originalPrompt}
+
+              YOUR SPECIFIC FOCUS:
+              {focus}
+
+              Respond based strictly on the incident details above. Do not invent or assume
+              any information not present in the description.
+              """;
+
+        return $"""
+            {incidentSection}
+
+            {formFields}
+            """;
+    }
+
+    private static string GetFormFieldsBlock(string domain) => domain.ToLowerInvariant() switch
+    {
+        "safety" => """
+            After your analysis, finish your response with this FORM_FIELDS section.
+            Fill each value from the incident. Use only the choices shown; write Unknown if unsure.
+
+            FORM_FIELDS:
+            incident_type: Workplace Accident
+            incident_date:
+            location:
+            description:
+            person_role: Unknown
+            injury_type: Unknown
+            body_part:
+            first_aid_given: Unknown
+            riddor_reportable: Unknown
+            riddor_category: Unknown
+            area_closed: Unknown
+            """,
+
+        "security" => """
+            After your analysis, finish your response with this FORM_FIELDS section.
+            Fill each value from the incident. Use only the choices shown; write Unknown if unsure.
+
+            FORM_FIELDS:
+            incident_type: Unauthorised Access
+            location:
+            description:
+            cctv_status: Unknown
+            footage_preserved: Unknown
+            police_notified: Unknown
+            threat_level: Medium
+            area_locked_down: Unknown
+            """,
+
+        "facilities" => """
+            After your analysis, finish your response with this FORM_FIELDS section.
+            Fill each value from the incident. Use only the choices shown; write Unknown if unsure.
+
+            FORM_FIELDS:
+            asset_type: Structural
+            location:
+            description:
+            severity: Medium
+            area_operational: Unknown
+            contractor_required: Unknown
+            estimated_restoration:
+            """,
+
+        _ => ""
+    };
 
     private static string BuildSynthesisPrompt(
         string originalPrompt,
-        Dictionary<string, string> results)
+        Dictionary<string, string> results,
+        List<string> selected)
     {
         var sb = new StringBuilder();
         sb.AppendLine("Synthesise the following specialist assessments into a unified incident response.");
         sb.AppendLine();
-        sb.AppendLine($"ORIGINAL INCIDENT:");
+        sb.AppendLine("ORIGINAL INCIDENT:");
         sb.AppendLine(originalPrompt);
         sb.AppendLine();
 
@@ -266,46 +594,34 @@ public sealed class HybridPatternRunner : IPatternRunner
             sb.AppendLine();
         }
 
-        if (results.Count < 3)
-        {
-            var skipped = new[] { "safety", "security", "facilities" }
-                .Except(results.Keys, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            if (skipped.Count > 0)
-            {
-                sb.AppendLine($"NOTE: {string.Join(", ", skipped).ToUpperInvariant()} specialist(s) were not invoked " +
-                              $"as this incident does not involve their domain.");
-            }
-        }
+        var skipped = new[] { "safety", "security", "facilities" }
+            .Except(selected, StringComparer.OrdinalIgnoreCase).ToList();
+        if (skipped.Count > 0)
+            sb.AppendLine($"NOTE: {string.Join(", ", skipped).ToUpperInvariant()} domains are not relevant to this incident.");
+
+        sb.AppendLine();
+        sb.AppendLine("Respond in EXACTLY this format (all fields required, no extra text):");
+        sb.AppendLine("EXECUTIVE_SUMMARY: <2-3 sentences on what happened and the key risks>");
+        sb.AppendLine("SEVERITY: <Low or Medium or High or Critical>");
+        sb.AppendLine("IMMEDIATE_ACTIONS:");
+        sb.AppendLine("- <action 1>");
+        sb.AppendLine("- <action 2>");
+        sb.AppendLine("24H_ACTIONS:");
+        sb.AppendLine("- <action 1>");
+        sb.AppendLine("- <action 2>");
+        sb.AppendLine("REGULATORY: <RIDDOR/HSE requirements, or None identified>");
 
         return sb.ToString();
     }
-}
 
-// ── Gateway Classifier Agent ──────────────────────────────────────────────────
+    // ── Result model ──────────────────────────────────────────────────────────
 
-internal sealed class GatewayClassifierAgent(Kernel kernel) : AssistAgent(kernel)
-{
-    public override string Name   => "Gateway Classifier";
-    public override string Colour => "#f59e0b"; // amber — the gateway/router
-    public override string Role   => "Gateway";
-
-    protected override string SystemPrompt => """
-        You are the Gateway Classifier for a multi-domain workplace
-        health, safety, and security system for a large UK retail organisation.
-
-        Your ONLY job is to read a workplace prompt and decide:
-        1. Which specialist domains are genuinely relevant (safety / security / facilities)
-        2. What specific, focused question to ask each relevant specialist
-
-        Be precise and selective:
-        - DO include a specialist if their domain is clearly relevant to the prompt
-        - DO NOT include a specialist just "in case" — if the prompt has no security
-          relevance, do not include the Security Specialist
-        - Tailor each specialist's question to the specific aspect of the prompt
-          relevant to their domain — do not just repeat the full prompt
-
-        Think of yourself as the intelligent gateway deciding which experts to wake up
-        and exactly what to ask them. Irrelevant experts should remain idle.
-        """;
+    private sealed class ClassificationResult
+    {
+        public bool                       NeedsClarification    { get; init; }
+        public string?                    ClarificationQuestion { get; init; }
+        public string?                    Reasoning             { get; set; }
+        public List<string>               SelectedAgents        { get; } = new();
+        public Dictionary<string, string> TailoredQuestions     { get; } = new(StringComparer.OrdinalIgnoreCase);
+    }
 }

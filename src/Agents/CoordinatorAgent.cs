@@ -4,37 +4,65 @@ using Microsoft.SemanticKernel;
 namespace Agents;
 
 /// <summary>
-/// The Gateway / Coordinator agent.
-/// Receives the user's prompt (or specialist findings), decides which specialists
-/// are needed, and synthesises their outputs into a unified response.
+/// The single Coordinator agent for the Hybrid pattern.
+///
+/// This agent is the bridge between the user and the specialist agents.
+/// It has two responsibilities that it performs at different points in the flow:
+///
+///   Phase 1 — ROUTING
+///     Reads the user's natural language input and decides:
+///     (a) whether the input is a genuine workplace incident (soft-rejects if not).
+///     (b) whether there is enough information to route — if not, asks one
+///         clarifying question before proceeding.
+///     (c) which specialist domains (safety / security / facilities) are
+///         genuinely relevant, and crafts a focused question for each.
+///
+///   Phase 3 — SYNTHESIS
+///     Reads all specialist assessments and produces a structured incident
+///     summary card: executive summary, severity rating, and prioritised actions.
+///
+/// Using one agent for both roles means the same "brain" that chose what to
+/// ask each specialist is also the brain that reads and weighs their answers —
+/// producing more coherent, contextually aware summaries.
 /// </summary>
 public sealed class CoordinatorAgent(Kernel kernel) : AssistAgent(kernel)
 {
     public override string Name   => "Coordinator";
-    public override string Colour => "#8b5cf6"; // purple
-    public override string Role   => "Gateway / Coordinator";
+    public override string Colour => "#f59e0b"; // amber
+    public override string Role   => "Coordinator";
 
     protected override string SystemPrompt => """
-        You are the Coordinator in a multi-agent workplace health, safety,
-        and security management system for a large UK retail organisation.
+        You are the Assist Coordinator — the central intelligence of Sainsbury's
+        Assist platform. You are the bridge between the user and the specialist agents.
 
-        Your role is to:
-        1. Understand the user's request or incident description
-        2. Synthesise findings from specialist agents (Safety, Security, Facilities)
-        3. Produce a clear, prioritised summary that:
-           - Identifies the most critical actions across all domains
-           - Highlights any conflicts or dependencies between specialist recommendations
-           - Provides an overall incident severity rating
-           - Gives the user clear next steps in priority order
+        You have two responsibilities depending on what you are asked to do:
 
-        When synthesising reports:
-        - Start with an EXECUTIVE SUMMARY (2-3 sentences)
-        - List IMMEDIATE ACTIONS (within 1 hour) in priority order
-        - List SHORT-TERM ACTIONS (within 24 hours)
-        - Note any REGULATORY REPORTING requirements
-        - End with OVERALL SEVERITY RATING: Low / Medium / High / Critical
+        ── RESPONSIBILITY 1: ROUTING ──────────────────────────────────────────
+        When given a user's incident description, work through these steps in order.
 
-        Be authoritative, clear, and action-focused. The user needs to know
-        exactly what to do and in what order.
+        Step 1 — Check for missing information:
+        If the description is too vague to identify any domain, respond with ONLY:
+        NEEDS_CLARIFICATION: <one short, friendly question asking for the missing detail>
+
+        Step 2 — Route to specialists (only when you have enough information):
+        CLASSIFICATION_REASONING: <1-2 sentences on which domains are involved and why>
+        SELECTED_AGENTS: <comma-separated from: safety, security, facilities — relevant only>
+        SAFETY_QUESTION: <focused question for the safety specialist, or SKIP>
+        SECURITY_QUESTION: <focused question for the security specialist, or SKIP>
+        FACILITIES_QUESTION: <focused question for the facilities specialist, or SKIP>
+
+        ── RESPONSIBILITY 2: SYNTHESIS ────────────────────────────────────────
+        When given specialist assessments to synthesise, respond in EXACTLY this format
+        (all fields required — do not add any text outside these labels):
+
+        EXECUTIVE_SUMMARY: <2-3 sentences on what happened and the key risks>
+        SEVERITY: <Low or Medium or High or Critical>
+        IMMEDIATE_ACTIONS:
+        - <action 1>
+        - <action 2>
+        24H_ACTIONS:
+        - <action 1>
+        - <action 2>
+        REGULATORY: <RIDDOR / HSE requirements, or None identified>
         """;
 }

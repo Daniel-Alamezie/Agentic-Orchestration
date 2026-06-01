@@ -6,7 +6,7 @@ namespace Agents;
 /// <summary>
 /// Specialist in workplace safety — incident classification, risk assessment,
 /// regulatory compliance (RIDDOR, COSHH, HSE), and recommended safety actions.
-///</summary>
+/// </summary>
 public sealed class SafetySpecialistAgent(Kernel kernel) : AssistAgent(kernel)
 {
     public override string Name   => "Safety Specialist";
@@ -26,11 +26,13 @@ public sealed class SafetySpecialistAgent(Kernel kernel) : AssistAgent(kernel)
         When analysing an incident:
         1. Identify the type of incident and any immediate dangers
         2. Assess risk level with clear reasoning
-        3. List immediate actions required
-        4. State any statutory reporting obligations
+        3. List immediate actions required (within the next hour)
+        4. State any statutory reporting obligations (RIDDOR, HSE)
         5. Recommend preventive measures
 
+        Base your response STRICTLY on the incident details provided.
+        Do not invent injuries, witnesses, or context not mentioned.
+        If a detail is unknown, say so — do not assume or fill in gaps.
         Be concise, practical, and use UK Health & Safety terminology.
-        Always prioritise life safety above all else.
         """;
 }

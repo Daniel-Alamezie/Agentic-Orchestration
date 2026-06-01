@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Core.Extensions;
+using Core.Infrastructure;
 using Core.Interfaces;
 using Core.Models;
 using Patterns;
@@ -90,5 +91,13 @@ app.MapGet("/api/run", async (
         await ctx.Response.Body.FlushAsync(CancellationToken.None);
     }
 });
+
+/// POST /api/respond?id={conversationId}&message={text}
+/// Delivers the user's clarification response to a paused HybridPatternRunner,
+/// unblocking the SSE stream so it continues from where it left off.
+app.MapPost("/api/respond", (ConversationStore store, string id, string message) =>
+    store.Respond(id, message)
+        ? Results.Ok()
+        : Results.NotFound($"No active conversation with id '{id}'."));
 
 app.Run();
