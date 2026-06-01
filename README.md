@@ -8,7 +8,6 @@ The domain throughout is workplace health, safety, and facilities management —
 
 ![.NET 10](https://img.shields.io/badge/.NET-10.0-blue)
 ![Semantic Kernel](https://img.shields.io/badge/Semantic%20Kernel-1.76-purple)
-![License: MIT](https://img.shields.io/badge/License-MIT-green)
 ![Ollama](https://img.shields.io/badge/LLM-Ollama%20%2B%20Llama%203.2-orange)
 
 ---
@@ -422,16 +421,4 @@ Run `ollama pull llama3.2` and ensure `ModelId` in `appsettings.json` matches ex
 
 ## Contributing
 
-Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## Code of Conduct
-
-See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
-
-## Security
-
-See [SECURITY.md](SECURITY.md).
-
-## Licence
-
-MIT — see [LICENSE](LICENSE).
+Raise a PR against `main`. Please include a clear description of what changed and why.
