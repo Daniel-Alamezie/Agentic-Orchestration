@@ -1,5 +1,23 @@
-﻿namespace MCPServer.Models
+﻿using System.Text.Json.Serialization;
+
+namespace MCPServer.Models
 {
+    // Polymorphic serialisation: without this, a List<ComponentBase> only serialises
+    // the base Type property and drops every derived-type field (FieldName, Options,
+    // nested Components, etc.). These attributes tell System.Text.Json to emit each
+    // concrete type's full shape, so get_page_components returns the real field tree.
+    // The "$type" discriminator is used to avoid clashing with the existing Type property.
+    [JsonPolymorphic(TypeDiscriminatorPropertyName = "$type")]
+    [JsonDerivedType(typeof(PageComponent),    nameof(PageComponent))]
+    [JsonDerivedType(typeof(TitleDisplay),     nameof(TitleDisplay))]
+    [JsonDerivedType(typeof(TextDisplay),      nameof(TextDisplay))]
+    [JsonDerivedType(typeof(CardContainer),    nameof(CardContainer))]
+    [JsonDerivedType(typeof(SemanticBox),      nameof(SemanticBox))]
+    [JsonDerivedType(typeof(Hyperlink),        nameof(Hyperlink))]
+    [JsonDerivedType(typeof(DateTimePicker),   nameof(DateTimePicker))]
+    [JsonDerivedType(typeof(TextInput),        nameof(TextInput))]
+    [JsonDerivedType(typeof(TextAreaInput),    nameof(TextAreaInput))]
+    [JsonDerivedType(typeof(RadioButtonGroup), nameof(RadioButtonGroup))]
     public class ComponentBase
     {
         public string Type { get; set; } = string.Empty;
