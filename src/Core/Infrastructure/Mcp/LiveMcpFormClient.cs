@@ -97,21 +97,25 @@ public sealed class LiveMcpFormClient : IMcpFormClient
         _logger.LogInformation("[MCP] Connected to Safety MCP server");
 
         // ── Discover what tool names the server actually registered ───────────
-        // The SDK may convert PascalCase method names to camelCase (or keep them).
-        // We build a case-insensitive lookup so our calls always resolve correctly
-        // regardless of the naming convention the server uses.
+        // The SDK converts PascalCase method names to snake_case (e.g. StartNewIncident
+        // → start_new_incident). We normalise both sides of the lookup by stripping
+        // underscores and lowercasing, so our PascalCase names resolve correctly
+        // regardless of whatever separator convention the server uses.
         var registeredTools = await client.ListToolsAsync(cancellationToken: ct);
+
+        static string Normalise(string name) =>
+            name.Replace("_", "").Replace("-", "").ToLowerInvariant();
+
         var toolNames = registeredTools.ToDictionary(
-            t => t.Name,
-            t => t.Name,
-            StringComparer.OrdinalIgnoreCase);
+            t => Normalise(t.Name),   // key: normalised form
+            t => t.Name);             // value: actual registered name
 
         _logger.LogInformation("[MCP] Server registered {Count} tool(s): {Names}",
-            toolNames.Count, string.Join(", ", toolNames.Keys));
+            toolNames.Count, string.Join(", ", registeredTools.Select(t => t.Name)));
 
         // Resolves our PascalCase name to whatever the server actually registered
         string Tool(string name) =>
-            toolNames.TryGetValue(name, out var actual) ? actual : name;
+            toolNames.TryGetValue(Normalise(name), out var actual) ? actual : name;
 
         // ── Step 1: Start a new session ───────────────────────────────────────
         var startResult = await client.CallToolAsync(
