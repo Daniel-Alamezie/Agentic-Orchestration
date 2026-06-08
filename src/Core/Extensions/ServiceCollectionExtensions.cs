@@ -27,9 +27,12 @@ public static class ServiceCollectionExtensions
         // Holds TaskCompletionSources for conversations paused awaiting user clarification.
         services.AddSingleton<ConversationStore>();
 
-        // MCP form client — dormant until a local MCP server is running.
-        // Swap to LiveMcpFormClient when ready (see DormantMcpFormClient XML doc).
-        services.AddSingleton<IMcpFormClient, DormantMcpFormClient>();
+        // MCP form client — live connection to the Safety MCP server (stdio transport).
+        // Safety domain: spawns the MCPServer subprocess and uses real tool calls.
+        // All other domains: returns null → HybridPatternRunner falls back to text extraction.
+        // On any connection failure: returns null → same text extraction fallback.
+        // To revert to the no-op dormant client: swap LiveMcpFormClient → DormantMcpFormClient.
+        services.AddSingleton<IMcpFormClient, LiveMcpFormClient>();
 
         return services;
     }
