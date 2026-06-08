@@ -149,11 +149,16 @@ public sealed class LiveMcpFormClient : IMcpFormClient
                 new Dictionary<string, object?> { ["pageNumber"] = page },
                 cancellationToken: ct);
 
-            var fields = ParseFieldsFromComponentJson(GetText(componentsResult) ?? "{}");
+            var componentJson = GetText(componentsResult) ?? "{}";
+            _logger.LogDebug("[MCP] Page {Page} raw components JSON: {Json}", page, componentJson);
+
+            var fields = ParseFieldsFromComponentJson(componentJson);
             if (fields.Count == 0)
             {
-                _logger.LogWarning("[MCP] No fields found for page {Page} — skipping", page);
-                continue;
+                _logger.LogWarning(
+                    "[MCP] No fields parsed for page {Page} from server — using known safety schema as fallback",
+                    page);
+                fields = KnownSafetyFields(page);
             }
 
             _logger.LogDebug("[MCP] Page {Page} fields: {Fields}",
@@ -285,8 +290,9 @@ public sealed class LiveMcpFormClient : IMcpFormClient
 
     /// <summary>
     /// Recursively walks the component JSON returned by GetPageComponents and
-    /// extracts field definitions. The server returns PascalCase property names
-    /// (default System.Text.Json serialisation with no custom naming policy).
+    /// extracts field definitions. Property matching is case-insensitive so it
+    /// works whether the MCP SDK serialises as camelCase (fieldName) or
+    /// PascalCase (FieldName).
     /// </summary>
     private static List<FieldDef> ParseFieldsFromComponentJson(string json)
     {
@@ -296,10 +302,9 @@ public sealed class LiveMcpFormClient : IMcpFormClient
             using var doc = JsonDocument.Parse(json);
             WalkComponentElement(doc.RootElement, fields);
         }
-        catch (JsonException ex)
+        catch (JsonException)
         {
-            // Return whatever we managed to parse — caller handles empty list
-            _ = ex;
+            // Not valid JSON — caller handles the empty list (falls back to known schema)
         }
         return fields;
     }
@@ -309,19 +314,21 @@ public sealed class LiveMcpFormClient : IMcpFormClient
         if (el.ValueKind != JsonValueKind.Object) return;
 
         // A form input element has a FieldName property
-        if (el.TryGetProperty("FieldName", out var fieldNameEl))
+        if (TryGetProp(el, "FieldName", out var fieldNameEl) &&
+            fieldNameEl.ValueKind == JsonValueKind.String)
         {
-            var name     = fieldNameEl.GetString() ?? "";
-            var label    = el.TryGetProperty("Label",    out var lbl)  ? lbl.GetString()  ?? name : name;
-            var type     = el.TryGetProperty("Type",     out var typ)  ? typ.GetString()  ?? ""   : "";
+            var name  = fieldNameEl.GetString() ?? "";
+            var label = TryGetProp(el, "Label", out var lbl) ? lbl.GetString() ?? name : name;
+            var type  = TryGetProp(el, "Type",  out var typ) ? typ.GetString() ?? ""   : "";
             var required = false;
             string[]? options = null;
 
-            if (el.TryGetProperty("Validation", out var valEl) &&
-                valEl.TryGetProperty("Required", out var reqEl))
+            if (TryGetProp(el, "Validation", out var valEl) &&
+                TryGetProp(valEl, "Required", out var reqEl) &&
+                (reqEl.ValueKind == JsonValueKind.True || reqEl.ValueKind == JsonValueKind.False))
                 required = reqEl.GetBoolean();
 
-            if (el.TryGetProperty("Options", out var optsEl) &&
+            if (TryGetProp(el, "Options", out var optsEl) &&
                 optsEl.ValueKind == JsonValueKind.Array)
             {
                 options = optsEl.EnumerateArray()
@@ -334,14 +341,68 @@ public sealed class LiveMcpFormClient : IMcpFormClient
                 fields.Add(new FieldDef(name, label, type, options, required));
         }
 
-        // Recurse into nested component arrays
-        if (el.TryGetProperty("Components", out var compsEl) &&
+        // Recurse into nested component arrays (Components / components)
+        if (TryGetProp(el, "Components", out var compsEl) &&
             compsEl.ValueKind == JsonValueKind.Array)
         {
             foreach (var child in compsEl.EnumerateArray())
                 WalkComponentElement(child, fields);
         }
     }
+
+    /// <summary>
+    /// Case- and underscore-insensitive property lookup, so "FieldName",
+    /// "fieldName", and "field_name" all resolve to the same value.
+    /// </summary>
+    private static bool TryGetProp(JsonElement obj, string name, out JsonElement value)
+    {
+        value = default;
+        if (obj.ValueKind != JsonValueKind.Object) return false;
+
+        static string Norm(string s) => s.Replace("_", "").ToLowerInvariant();
+        var target = Norm(name);
+
+        foreach (var prop in obj.EnumerateObject())
+        {
+            if (Norm(prop.Name) == target)
+            {
+                value = prop.Value;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Fallback field definitions for the safety form, used when the server's
+    /// component JSON cannot be parsed (e.g. polymorphic serialisation strips
+    /// the nested fields). Mirrors the MCPServer's PageDefinitions exactly so
+    /// update_incident_page still receives the field names it expects.
+    /// </summary>
+    private static List<FieldDef> KnownSafetyFields(int page) => page switch
+    {
+        1 =>
+        [
+            new("IncidentDate",     "When did the incident occur?", "date",  null, true),
+            new("IncidentLocation", "Where did the incident occur?", "text", null, true),
+            new("IncidentType",     "What type of incident was it?", "radio",
+                ["Slip/Trip/Fall", "Equipment Failure", "Chemical Spill",
+                 "Fire/Explosion", "Electrical", "Vehicle Accident", "Other"], true),
+            new("SeverityLevel",    "What is the severity level?", "radio",
+                ["Minor (No injury, minimal damage)",
+                 "Moderate (First aid required, some damage)",
+                 "Serious (Medical attention required, significant damage)",
+                 "Critical (Hospitalization, major damage or loss)"], true),
+        ],
+        2 =>
+        [
+            new("PersonsInvolved",       "Who was involved or witnessed?", "textarea", null, true),
+            new("InjuriesReported",      "Were there any injuries?",       "textarea", null, true),
+            new("IncidentDescription",   "Describe what happened.",        "textarea", null, true),
+            new("ImmediateActionsTaken", "What immediate actions were taken?", "textarea", null, true),
+        ],
+        _ => []
+    };
 
     // ── FilledForm construction ───────────────────────────────────────────────
 
