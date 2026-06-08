@@ -10,6 +10,18 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Resolved path to the MCPServer project — used in the pre-build target below -->
+    <McpServerProject>$(MSBuildThisFileDirectory)..\MCPServer\MCPServer.csproj</McpServerProject>
   </PropertyGroup>
+
+  <!--
+    Pre-build MCPServer so LiveMcpFormClient can spawn it with dotnet run - -no-build.
+    Runs before every Web build. dotnet build is idempotent — it's a no-op when nothing
+    has changed, so this adds no meaningful overhead on incremental builds.
+  -->
+  <Target Name="BuildMcpServer" BeforeTargets="Build">
+    <Message Text="Pre-building MCPServer..." Importance="normal" />
+    <Exec Command="dotnet build &quot;$(McpServerProject)&quot; --nologo -v minimal" />
+  </Target>
 
 </Project>

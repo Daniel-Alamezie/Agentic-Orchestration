@@ -86,7 +86,9 @@ public sealed class LiveMcpFormClient : IMcpFormClient
         {
             Name      = "SafetyMcpServer",
             Command   = "dotnet",
-            Arguments = ["run", "--project", _serverPath]
+            // --no-build: MCPServer is pre-built by Web.csproj's BuildMcpServer target
+            // before every Web build, so the binary is always up to date.
+            Arguments = ["run", "--project", _serverPath, "--no-build"]
         });
 
         _logger.LogInformation("[MCP] Spawning Safety MCP server from '{Path}'", _serverPath);
