@@ -123,7 +123,7 @@ public sealed class LiveMcpFormClient : IMcpFormClient
             new Dictionary<string, object?>(),
             cancellationToken: ct);
 
-        var incidentId = ExtractIncidentId(GetText(startResult));
+        var incidentId = ExtractIncidentId(startResult);
         if (string.IsNullOrEmpty(incidentId))
         {
             _logger.LogWarning("[MCP] Could not extract incidentId from StartNewIncident response");
@@ -415,20 +415,52 @@ public sealed class LiveMcpFormClient : IMcpFormClient
         result.Content.OfType<TextContentBlock>().FirstOrDefault()?.Text;
 
     /// <summary>
-    /// Parses the incidentId from the JSON returned by StartNewIncident.
-    /// The server returns the full SafetyIncident object serialised as JSON.
+    /// Parses the incidentId from a tool result. The server returns the full
+    /// SafetyIncident object, which the MCP SDK exposes both as a JSON text block
+    /// AND in StructuredContent. The SDK serialises property names in camelCase
+    /// (incidentId), so we match the property case-insensitively.
     /// </summary>
-    private static string? ExtractIncidentId(string? json)
+    private static string? ExtractIncidentId(CallToolResult result)
     {
+        // Prefer the SDK's structured output if present, else fall back to the text block
+        if (result.StructuredContent is JsonElement structured &&
+            TryFindStringProperty(structured, "incidentId", out var fromStructured))
+            return fromStructured;
+
+        var json = GetText(result);
         if (string.IsNullOrWhiteSpace(json)) return null;
+
         try
         {
             using var doc = JsonDocument.Parse(json);
-            if (doc.RootElement.TryGetProperty("IncidentId", out var el))
-                return el.GetString();
+            if (TryFindStringProperty(doc.RootElement, "incidentId", out var fromText))
+                return fromText;
         }
-        catch { /* ignored — return null below */ }
+        catch { /* not JSON — return null below */ }
         return null;
+    }
+
+    /// <summary>
+    /// Finds a string property by name, ignoring case and underscores
+    /// (so "incidentId", "IncidentId", and "incident_id" all match).
+    /// </summary>
+    private static bool TryFindStringProperty(JsonElement obj, string name, out string? value)
+    {
+        value = null;
+        if (obj.ValueKind != JsonValueKind.Object) return false;
+
+        static string Norm(string s) => s.Replace("_", "").ToLowerInvariant();
+        var target = Norm(name);
+
+        foreach (var prop in obj.EnumerateObject())
+        {
+            if (Norm(prop.Name) == target && prop.Value.ValueKind == JsonValueKind.String)
+            {
+                value = prop.Value.GetString();
+                return !string.IsNullOrEmpty(value);
+            }
+        }
+        return false;
     }
 
     // ── Internal model ────────────────────────────────────────────────────────
