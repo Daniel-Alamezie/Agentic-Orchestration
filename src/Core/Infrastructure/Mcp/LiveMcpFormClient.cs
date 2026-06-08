@@ -96,9 +96,26 @@ public sealed class LiveMcpFormClient : IMcpFormClient
         await using var client = await McpClient.CreateAsync(transport, cancellationToken: ct);
         _logger.LogInformation("[MCP] Connected to Safety MCP server");
 
+        // ── Discover what tool names the server actually registered ───────────
+        // The SDK may convert PascalCase method names to camelCase (or keep them).
+        // We build a case-insensitive lookup so our calls always resolve correctly
+        // regardless of the naming convention the server uses.
+        var registeredTools = await client.ListToolsAsync(cancellationToken: ct);
+        var toolNames = registeredTools.ToDictionary(
+            t => t.Name,
+            t => t.Name,
+            StringComparer.OrdinalIgnoreCase);
+
+        _logger.LogInformation("[MCP] Server registered {Count} tool(s): {Names}",
+            toolNames.Count, string.Join(", ", toolNames.Keys));
+
+        // Resolves our PascalCase name to whatever the server actually registered
+        string Tool(string name) =>
+            toolNames.TryGetValue(name, out var actual) ? actual : name;
+
         // ── Step 1: Start a new session ───────────────────────────────────────
         var startResult = await client.CallToolAsync(
-            "StartNewIncident",
+            Tool("StartNewIncident"),
             new Dictionary<string, object?>(),
             cancellationToken: ct);
 
@@ -111,7 +128,7 @@ public sealed class LiveMcpFormClient : IMcpFormClient
         _logger.LogInformation("[MCP] Session started — incidentId: {Id}", incidentId);
 
         // ── Step 2: How many pages does the form have? ────────────────────────
-        var pagesResult  = await client.CallToolAsync("GetTotalPages", new Dictionary<string, object?>(), cancellationToken: ct);
+        var pagesResult  = await client.CallToolAsync(Tool("GetTotalPages"), new Dictionary<string, object?>(), cancellationToken: ct);
         var totalPages   = int.TryParse(GetText(pagesResult)?.Trim(), out var n) ? n : 2;
         _logger.LogInformation("[MCP] Form has {Total} page(s)", totalPages);
 
@@ -124,7 +141,7 @@ public sealed class LiveMcpFormClient : IMcpFormClient
 
             // Ask the server what fields this page contains
             var componentsResult = await client.CallToolAsync(
-                "GetPageComponents",
+                Tool("GetPageComponents"),
                 new Dictionary<string, object?> { ["pageNumber"] = page },
                 cancellationToken: ct);
 
@@ -154,7 +171,7 @@ public sealed class LiveMcpFormClient : IMcpFormClient
 
             // Submit the page back to the MCP server
             var updateResult = await client.CallToolAsync(
-                "UpdateIncidentPage",
+                Tool("UpdateIncidentPage"),
                 new Dictionary<string, object?>
                 {
                     ["incidentId"] = incidentId,
@@ -172,7 +189,7 @@ public sealed class LiveMcpFormClient : IMcpFormClient
 
         // ── Step 4: Seal the incident on the server ───────────────────────────
         await client.CallToolAsync(
-            "CompleteIncident",
+            Tool("CompleteIncident"),
             new Dictionary<string, object?> { ["incidentId"] = incidentId },
             cancellationToken: ct);
         _logger.LogInformation("[MCP] Incident {Id} completed on server", incidentId);
