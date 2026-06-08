@@ -2,6 +2,9 @@
   <Folder Name="/src/">
     <Project Path="src/Agents/Agents.csproj" />
     <Project Path="src/Core/Core.csproj" />
+    <Project Path="src/MCPServer/MCPServer.csproj">
+      <Build Solution="Debug|*" Project="false" />
+    </Project>
     <Project Path="src/Patterns/Patterns.csproj" />
     <Project Path="src/Web/Web.csproj" />
   </Folder>
