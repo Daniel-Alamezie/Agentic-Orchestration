@@ -34,8 +34,8 @@ public sealed class DormantMcpFormClient(ILogger<DormantMcpFormClient> logger) :
     public IReadOnlyList<McpToolDefinition> ExpectedTools => McpToolSchemas.All;
 
     /// <inheritdoc/>
-    /// Always empty — no server to discover fields from.
-    public Task<IReadOnlyList<McpFormField>> GetFormFieldsAsync(
+    /// Always returns <c>null</c> — no server to open a session against.
+    public Task<IMcpFormSession?> BeginSessionAsync(
         string domain,
         CancellationToken cancellationToken = default)
     {
@@ -44,7 +44,7 @@ public sealed class DormantMcpFormClient(ILogger<DormantMcpFormClient> logger) :
             "caller falls back to structured text extraction.",
             domain);
 
-        return Task.FromResult<IReadOnlyList<McpFormField>>([]);
+        return Task.FromResult<IMcpFormSession?>(null);
     }
 
     /// <inheritdoc/>
@@ -56,12 +56,4 @@ public sealed class DormantMcpFormClient(ILogger<DormantMcpFormClient> logger) :
         CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyDictionary<string, string>>(
             new Dictionary<string, string>());
-
-    /// <inheritdoc/>
-    /// Always returns <c>null</c>; caller should fall back to text extraction.
-    public Task<FilledForm?> SubmitFormAsync(
-        string domain,
-        IReadOnlyDictionary<string, string> answers,
-        CancellationToken cancellationToken = default) =>
-        Task.FromResult<FilledForm?>(null);
 }

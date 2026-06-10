@@ -257,13 +257,14 @@ public sealed class HybridPatternRunner : IPatternRunner
             " Classified → fan-out → synthesised.");
     }
 
-    // ── Conversational safety form fill (MCP-backed) ─────────────────────────────
-    // Discovers the safety form's fields from the MCP server, lets the AI pre-fill
-    // what it can, then asks the user — one question at a time, using the form's own
-    // labels — for any required field that's still missing. Finally submits to MCP.
+    // ── Conversational safety form fill (MCP-backed, page by page) ───────────────
+    // Drives a stateful MCP session one page at a time: fetch the current page's
+    // questions from the server, let the AI pre-fill what it can, ask the user for the
+    // rest, submit the page, then fetch the next. The server shapes each page from the
+    // answers already submitted (branching forms), so pages cannot be fetched up front.
     //
-    // Questions are strictly bounded by the form schema: the agent can only ask about
-    // fields that exist on the form and are still empty, so it cannot wander off-topic.
+    // Questions are strictly bounded by the server's page schema: the agent can only ask
+    // about fields the server presented and that are still empty — it cannot wander.
 
     private async IAsyncEnumerable<AgentEvent> FillSafetyFormConversationallyAsync(
         AssistAgent coordinator,
@@ -271,11 +272,11 @@ public sealed class HybridPatternRunner : IPatternRunner
         string safetyResponse,
         [EnumeratorCancellation] CancellationToken ct)
     {
-        yield return AgentEvent.SystemNote("Preparing the Safety Incident Report — checking what's needed...");
+        yield return AgentEvent.SystemNote("Preparing the Safety Incident Report — opening a session...");
 
-        // 1. Discover the form's fields from the MCP server
-        var fields = await _mcpClient.GetFormFieldsAsync("safety", ct);
-        if (fields.Count == 0)
+        // Open the persistent, page-by-page session
+        await using var session = await _mcpClient.BeginSessionAsync("safety", ct);
+        if (session is null)
         {
             // MCP unavailable — fall back to text extraction from the specialist response
             var fallback = FormSchemaRegistry.ParseFormFields(safetyResponse, "safety");
@@ -284,54 +285,82 @@ public sealed class HybridPatternRunner : IPatternRunner
             yield break;
         }
 
-        // 2. AI pre-fills whatever it can from the incident + specialist analysis
+        // Shared context the AI uses to pre-fill each page's fields
         var analysis = FormSchemaRegistry.StripFormFields(safetyResponse);
         var context  = $"INCIDENT:\n{userPrompt}\n\nSPECIALIST ANALYSIS:\n{analysis}";
-        var extracted = await _mcpClient.ExtractAnswersAsync("safety", fields, context, ct);
-        var answers   = new Dictionary<string, string>(extracted, StringComparer.OrdinalIgnoreCase);
 
-        // 3. Ask the user for the required fields — one at a time
-        //    • Text fields: only ask if the AI couldn't fill them.
-        //    • Choice fields: ALWAYS ask so the user picks/confirms from the options
-        //      (the AI's guess, if any, is passed through as a highlighted suggestion).
-        var asked = 0;
-        foreach (var field in fields.Where(f => f.Required))
+        var answers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var asked   = 0;
+        string? error = null;
+
+        // Loop pages until the server has no more to present
+        for (var pageNumber = 1; ; pageNumber++)
         {
-            var aiValue = answers.TryGetValue(field.Id, out var have) && !string.IsNullOrWhiteSpace(have)
-                ? have
-                : null;
+            var page = await session.GetPageAsync(pageNumber, ct);
+            if (page is null || page.Fields.Count == 0)
+                break;   // no more pages
 
-            if (!field.IsChoice && aiValue is not null)
-                continue;   // text field already filled by the AI — don't ask
+            // AI pre-fills what it can for THIS page (its fields are only known now)
+            var extracted = await _mcpClient.ExtractAnswersAsync("safety", page.Fields, context, ct);
+            foreach (var kv in extracted) answers[kv.Key] = kv.Value;
 
-            if (asked == 0)
-                yield return AgentEvent.SystemNote("I need a few details to complete the form:");
-            asked++;
+            // Ask the user for the required fields on this page:
+            //   • Text fields  — only if the AI couldn't fill them
+            //   • Choice fields — always, so the user picks/confirms from the options
+            foreach (var field in page.Fields.Where(f => f.Required))
+            {
+                var aiValue = answers.TryGetValue(field.Id, out var have) && !string.IsNullOrWhiteSpace(have)
+                    ? have
+                    : null;
 
-            var conversationId = _store.Create();
-            yield return AgentEvent.FormQuestionEvent(
-                coordinator.Name, coordinator.Colour, field.Label, conversationId,
-                field.Options, field.IsChoice ? aiValue : null);
+                if (!field.IsChoice && aiValue is not null)
+                    continue;
 
-            // C# disallows yield inside catch — capture the error, yield after
-            string? answer = null, error = null;
-            try   { answer = await _store.WaitForResponseAsync(conversationId, ct); }
-            catch (OperationCanceledException) { error = "Session timed out waiting for your response."; }
+                if (asked == 0)
+                    yield return AgentEvent.SystemNote("I need a few details to complete the form:");
+                asked++;
 
-            if (error is not null) { yield return AgentEvent.Error(error); yield break; }
+                var conversationId = _store.Create();
+                yield return AgentEvent.FormQuestionEvent(
+                    coordinator.Name, coordinator.Colour, field.Label, conversationId,
+                    field.Options, field.IsChoice ? aiValue : null);
 
-            answers[field.Id] = answer!.Trim();
+                // C# disallows yield inside catch — capture the error, yield after the loop
+                string? answer = null;
+                try   { answer = await _store.WaitForResponseAsync(conversationId, ct); }
+                catch (OperationCanceledException) { error = "Session timed out waiting for your response."; }
+
+                if (error is not null) break;
+                answers[field.Id] = answer!.Trim();
+            }
+
+            if (error is not null) break;
+
+            // Submit this page — the server validates it and shapes the next page
+            await session.SubmitPageAsync(pageNumber, PageAnswers(page, answers), ct);
         }
+
+        if (error is not null) { yield return AgentEvent.Error(error); yield break; }
 
         yield return AgentEvent.SystemNote(
             asked > 0
                 ? "Thanks — I have everything I need. Submitting the report..."
                 : "All fields filled from the incident — submitting the report...");
 
-        // 4. Submit to the MCP server and emit the completed form
-        var form = await _mcpClient.SubmitFormAsync("safety", answers, ct);
-        if (form is not null)
-            yield return AgentEvent.FormFilledEvent(coordinator.Name, coordinator.Colour, form);
+        // Finalise on the server and emit the completed form built from the served pages
+        await session.CompleteAsync(ct);
+        yield return AgentEvent.FormFilledEvent(coordinator.Name, coordinator.Colour, session.BuildForm(answers));
+    }
+
+    /// <summary>Picks the answers belonging to a given page's fields.</summary>
+    private static Dictionary<string, string> PageAnswers(
+        McpFormPage page, IReadOnlyDictionary<string, string> all)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var field in page.Fields)
+            if (all.TryGetValue(field.Id, out var v) && !string.IsNullOrWhiteSpace(v))
+                result[field.Id] = v;
+        return result;
     }
 
     // ── Scope guard — keyword-based, no LLM call ─────────────────────────────

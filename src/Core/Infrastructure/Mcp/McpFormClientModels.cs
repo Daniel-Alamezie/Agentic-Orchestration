@@ -37,3 +37,13 @@ public sealed record McpFormField(
     /// <summary>True when this is a choice field — the UI shows selectable options.</summary>
     public bool IsChoice => Options is { Length: > 0 };
 }
+
+/// <summary>
+/// One page of an MCP-served form, fetched on demand. For branching forms a page's
+/// content is only known once the previous page has been submitted, so pages are
+/// fetched one at a time rather than all up front.
+/// </summary>
+public sealed record McpFormPage(
+    int                         Number,
+    string                      Title,
+    IReadOnlyList<McpFormField> Fields);
