@@ -56,6 +56,16 @@ public interface IMcpFormClient
         IReadOnlyList<McpFormField> fields,
         string context,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Converts a natural-language date/time (e.g. "half 9 this morning", "yesterday
+    /// afternoon") into a normalised "yyyy-MM-dd HH:mm" string, resolving relative
+    /// expressions against the current date/time. Used for date-typed form fields.
+    /// Returns the original text unchanged if it can't be parsed into a real datetime.
+    /// </summary>
+    Task<string> NormaliseDateTimeAsync(
+        string text,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>

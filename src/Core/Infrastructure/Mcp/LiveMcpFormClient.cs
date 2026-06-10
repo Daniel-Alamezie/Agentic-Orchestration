@@ -1,5 +1,7 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Core.Interfaces;
 using Core.Models;
 using Microsoft.Extensions.Configuration;
@@ -145,6 +147,55 @@ public sealed class LiveMcpFormClient : IMcpFormClient
 
     private static string Normalise(string name) =>
         name.Replace("_", "").Replace("-", "").ToLowerInvariant();
+
+    // ── Date/time normalisation ────────────────────────────────────────────────
+
+    /// <inheritdoc/>
+    public async Task<string> NormaliseDateTimeAsync(
+        string text, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return text;
+
+        try
+        {
+            var now = DateTimeOffset.Now;
+            var history = new ChatHistory();
+            history.AddSystemMessage(
+                "Convert the user's natural-language incident time into the EXACT format " +
+                "yyyy-MM-dd HH:mm (24-hour clock). Resolve relative expressions against the " +
+                "current date/time provided. British phrasing: 'half 9' = 09:30, " +
+                "'half nine' = 09:30, 'quarter past 8' = 08:15, 'quarter to 10' = 09:45, " +
+                "'this morning' / 'this afternoon' keep today's date with the stated time. " +
+                "If only a time is given, use today's date. If only a date is given, use 00:00. " +
+                "Reply with ONLY the formatted value, nothing else. If you truly cannot tell, reply UNKNOWN.");
+            history.AddUserMessage(
+                $"Current date and time: {now:yyyy-MM-dd HH:mm} ({now:dddd}).\nIncident time: \"{text}\"");
+
+            var response = await _chat.GetChatMessageContentAsync(history, cancellationToken: cancellationToken);
+            var raw = (response.Content ?? "").Trim().Trim('"', '`');
+
+            // Pull a date(-time) token out of the reply in case the model added words
+            var match     = Regex.Match(raw, @"\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2})?");
+            var candidate = match.Success ? match.Value : raw;
+
+            if (DateTime.TryParse(candidate, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
+            {
+                var formatted = dt.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+                _logger.LogInformation("[MCP] Normalised incident time '{Raw}' → '{Iso}'", text, formatted);
+                return formatted;
+            }
+
+            _logger.LogDebug(
+                "[MCP] Could not normalise incident time '{Raw}' (model replied '{Model}') — keeping original",
+                text, raw);
+            return text;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[MCP] Date normalisation failed — keeping original text");
+            return text;
+        }
+    }
 
     // ── AI extraction helpers ──────────────────────────────────────────────────
 

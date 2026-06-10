@@ -336,6 +336,21 @@ public sealed class HybridPatternRunner : IPatternRunner
 
             if (error is not null) break;
 
+            // Convert any date/time answers on this page into a proper datetime
+            // (e.g. "half 9 this morning" → "2026-06-10 09:30") before submitting
+            foreach (var field in page.Fields.Where(f => f.Type == "date"))
+            {
+                if (!answers.TryGetValue(field.Id, out var raw) || string.IsNullOrWhiteSpace(raw))
+                    continue;
+
+                var normalised = await _mcpClient.NormaliseDateTimeAsync(raw, ct);
+                if (!string.Equals(normalised, raw, StringComparison.Ordinal))
+                {
+                    answers[field.Id] = normalised;
+                    yield return AgentEvent.SystemNote($"Recorded the incident time as {normalised}.");
+                }
+            }
+
             // Submit this page — the server validates it and shapes the next page
             await session.SubmitPageAsync(pageNumber, PageAnswers(page, answers), ct);
         }

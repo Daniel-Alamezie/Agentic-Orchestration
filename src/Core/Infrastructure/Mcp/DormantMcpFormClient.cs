@@ -56,4 +56,10 @@ public sealed class DormantMcpFormClient(ILogger<DormantMcpFormClient> logger) :
         CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyDictionary<string, string>>(
             new Dictionary<string, string>());
+
+    /// <inheritdoc/>
+    /// No LLM — returns the text unchanged.
+    public Task<string> NormaliseDateTimeAsync(
+        string text, CancellationToken cancellationToken = default) =>
+        Task.FromResult(text);
 }
