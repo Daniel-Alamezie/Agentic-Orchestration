@@ -307,6 +307,9 @@ public sealed class HybridPatternRunner : IPatternRunner
             // Ask the user for the required fields on this page:
             //   • Text fields  — only if the AI couldn't fill them
             //   • Choice fields — always, so the user picks/confirms from the options
+            var userAnswered   = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var userStatements = new List<string>();
+
             foreach (var field in page.Fields.Where(f => f.Required))
             {
                 var aiValue = answers.TryGetValue(field.Id, out var have) && !string.IsNullOrWhiteSpace(have)
@@ -331,10 +334,33 @@ public sealed class HybridPatternRunner : IPatternRunner
                 catch (OperationCanceledException) { error = "Session timed out waiting for your response."; }
 
                 if (error is not null) break;
-                answers[field.Id] = answer!.Trim();
+
+                var clean = answer!.Trim();
+                answers[field.Id] = clean;
+                userAnswered.Add(field.Id);
+                userStatements.Add($"{field.Label} {clean}");
             }
 
             if (error is not null) break;
+
+            // Aggregate: re-map the AI-derived TEXT fields against the full picture —
+            // the incident plus everything the user just told us — so the right answer
+            // lands in the right box (fixes mismaps like a location ending up in the
+            // date field). The user's own choice selections and typed answers are
+            // authoritative and are left untouched.
+            var aiTextFields = page.Fields
+                .Where(f => !f.IsChoice && !userAnswered.Contains(f.Id))
+                .ToList();
+            if (aiTextFields.Count > 0)
+            {
+                var extra = userStatements.Count > 0
+                    ? $"\n\nDETAILS THE USER PROVIDED:\n- {string.Join("\n- ", userStatements)}"
+                    : "";
+                var aggregated = await _mcpClient.ExtractAnswersAsync(
+                    "safety", aiTextFields, context + extra, ct);
+                foreach (var kv in aggregated)
+                    answers[kv.Key] = kv.Value;
+            }
 
             // Convert any date/time answers on this page into a proper datetime
             // (e.g. "half 9 this morning" → "2026-06-10 09:30") before submitting

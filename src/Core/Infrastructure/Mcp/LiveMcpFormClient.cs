@@ -125,10 +125,11 @@ public sealed class LiveMcpFormClient : IMcpFormClient
         {
             var history = new ChatHistory();
             history.AddSystemMessage(
-                "You are a form-filling assistant. " +
-                "Extract values strictly from the incident description — do not invent information. " +
-                "For selection fields, pick exactly one of the listed options. " +
-                "If a value genuinely cannot be determined, omit that line entirely.");
+                "You are a form-filling assistant. Extract values strictly from the information " +
+                "provided — never invent anything. Match each answer to the field whose QUESTION it " +
+                "answers: a 'where' detail goes to the location field, a 'when' detail to the date field, " +
+                "and so on. Never put a value in the wrong field. For selection fields, pick exactly one " +
+                "of the listed options. If a field's answer isn't stated, omit that line entirely.");
             history.AddUserMessage(BuildExtractionPrompt(fields, context));
 
             var response = await _chat.GetChatMessageContentAsync(history, cancellationToken: cancellationToken);
@@ -202,20 +203,22 @@ public sealed class LiveMcpFormClient : IMcpFormClient
     private static string BuildExtractionPrompt(IReadOnlyList<McpFormField> fields, string context)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("Extract values for each field below from the incident description.");
-        sb.AppendLine("Write your answers as FieldName: value, one per line.");
-        sb.AppendLine("For selection fields choose EXACTLY one of the listed options.");
-        sb.AppendLine("If a value cannot be determined, omit that line completely.");
+        sb.AppendLine("Using only the information below, answer each form question.");
+        sb.AppendLine("Reply with one line per field, formatted exactly as  field_id: value");
+        sb.AppendLine("Use each field's QUESTION to decide what it means, so the right answer goes to the");
+        sb.AppendLine("right field (e.g. a location belongs in the 'where' field, a time in the 'when' field).");
+        sb.AppendLine("Omit a field's line entirely if its answer is not stated — do not guess.");
+        sb.AppendLine("For choice fields, pick EXACTLY one of the listed options.");
         sb.AppendLine();
         sb.AppendLine(context);
         sb.AppendLine();
-        sb.AppendLine("FORM_FIELDS:");
+        sb.AppendLine("FIELDS (field_id — question):");
         foreach (var f in fields)
         {
             if (f.IsChoice)
-                sb.AppendLine($"{f.Id}: (choose one: {string.Join(" | ", f.Options!)})");
+                sb.AppendLine($"{f.Id} — {f.Label}  Options: {string.Join(" | ", f.Options!)}");
             else
-                sb.AppendLine($"{f.Id}:");
+                sb.AppendLine($"{f.Id} — {f.Label}");
         }
         return sb.ToString();
     }
