@@ -8,11 +8,13 @@ public record AgentEvent(
     string              Content,
     AgentEventType      EventType,
     DateTimeOffset      Timestamp,
-    string?             ConversationId = null,   // ClarificationRequest only
+    string?             ConversationId = null,   // ClarificationRequest / FormQuestion
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     StructuredSummaryData? Summary = null,       // StructuredSummary event only
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    FilledForm?         Form = null              // FormFilled event only
+    FilledForm?         Form = null,             // FormFilled event only
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string[]?           Options = null           // FormQuestion (choice fields) only
 )
 {
     public static AgentEvent SystemNote(string content) =>
@@ -36,6 +38,17 @@ public record AgentEvent(
         string agentName, string colour, string question, string conversationId) =>
         new(agentName, colour, question, AgentEventType.ClarificationRequest,
             DateTimeOffset.UtcNow, conversationId);
+
+    /// <summary>
+    /// A form-driven question: asks the user to fill one missing required field.
+    /// The question text is the form field's own label. When <paramref name="options"/>
+    /// is supplied (choice field), the UI shows them as selectable buttons; otherwise
+    /// it shows a free-text input. The user's reply comes back via the ConversationId.
+    /// </summary>
+    public static AgentEvent FormQuestionEvent(
+        string agentName, string colour, string question, string conversationId, string[]? options) =>
+        new(agentName, colour, question, AgentEventType.FormQuestion,
+            DateTimeOffset.UtcNow, conversationId, Options: options);
 
     public static AgentEvent Aggregate(string content) =>
         new("Coordinator", "#8b5cf6", content, AgentEventType.AggregatedResult, DateTimeOffset.UtcNow);
@@ -72,6 +85,7 @@ public enum AgentEventType
     AgentResponse,
     Reasoning,              // Decision explanation — shown in a collapsible block
     ClarificationRequest,   // Agent needs more info — stream pauses, user prompted
+    FormQuestion,           // Form-driven question for one missing field — stream pauses
     AggregatedResult,       // Non-streaming aggregated result (used by non-hybrid patterns)
     StructuredSummary,      // Coordinator's Phase-3 structured card (Hybrid only)
     FormFilled,             // A specialist's FORM_FIELDS parsed into a FilledForm (Hybrid only)

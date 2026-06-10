@@ -253,6 +253,7 @@
     let activeStream    = null;
     let isRunning       = false;
     let pendingConvId   = null;
+    let currentFormOptions = [];   // options for the active FormQuestion (choice fields)
 
     // Forms state
     let filledForms      = [];
@@ -668,14 +669,15 @@
       renderInputBar('done');
     }
 
-    // ── Clarification reply ───────────────────────────────────────────────────
-    async function submitClarification() {
-      const input   = document.getElementById('clarification-input');
-      const message = input?.value.trim();
+    // ── Clarification / form-question reply ───────────────────────────────────
+    // Shared send path — used by both the free-text input bar and the option buttons.
+    async function sendAnswer(message) {
+      message = (message ?? '').trim();
       if (!message || !pendingConvId) return;
 
       const convId  = pendingConvId;
       pendingConvId = null;
+      currentFormOptions = [];
 
       renderInputBar('running');
       appendUserMessage(message);
@@ -684,6 +686,11 @@
         `/api/respond?id=${encodeURIComponent(convId)}&message=${encodeURIComponent(message)}`,
         { method: 'POST' }
       );
+    }
+
+    function submitClarification() {
+      const input = document.getElementById('clarification-input');
+      sendAnswer(input?.value);
     }
 
     // ── Event renderer ────────────────────────────────────────────────────────
@@ -797,6 +804,50 @@
             </div>`;
           chat(el);
           renderInputBar('clarification');
+          break;
+        }
+
+        // ── Form-driven question (one missing field) ─────────────────────────
+        case 'FormQuestion': {
+          document.getElementById(`thinker-${sid(agentName)}`)?.remove();
+          pendingConvId = conversationId;
+          const opts = evt.options || [];
+          currentFormOptions = opts;
+
+          // Choice fields → clickable option buttons; text fields → bottom input bar
+          const optionsHtml = opts.length
+            ? `<div class="flex flex-wrap gap-2 mt-3">
+                 ${opts.map((o, i) => `
+                   <button onclick="sendAnswer(currentFormOptions[${i}])"
+                     class="px-3 py-2 text-sm rounded-xl text-left transition-colors"
+                     style="background:rgba(240,108,0,0.12);border:1.5px solid rgba(240,108,0,0.4);color:#FFD7B0"
+                     onmouseover="this.style.background='rgba(240,108,0,0.25)'"
+                     onmouseout ="this.style.background='rgba(240,108,0,0.12)'">
+                     ${esc(o)}
+                   </button>`).join('')}
+               </div>`
+            : '';
+
+          const el = agentRow(null);
+          el.innerHTML = `
+            ${avatar(agentName, agentColour)}
+            <div class="flex-1 min-w-0" style="max-width:78%">
+              <div class="text-xs font-semibold mb-1.5" style="color:${agentColour}">${esc(agentName)}</div>
+              <div class="px-4 py-3 rounded-2xl rounded-tl-none text-sm text-white leading-relaxed"
+                   style="background:rgba(240,108,0,0.1);border:1.5px solid rgba(240,108,0,0.5)">
+                <div class="flex items-center gap-1.5 mb-2.5">
+                  <span class="inline-flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded-full"
+                        style="background:rgba(240,108,0,0.2);color:#FF8C1A">
+                    📋 Form question
+                  </span>
+                </div>
+                ${esc(content)}
+                ${optionsHtml}
+              </div>
+            </div>`;
+          chat(el);
+
+          if (opts.length === 0) renderInputBar('clarification');
           break;
         }
 

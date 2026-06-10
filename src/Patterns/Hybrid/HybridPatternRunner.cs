@@ -208,29 +208,30 @@ public sealed class HybridPatternRunner : IPatternRunner
 
         await Task.WhenAll(producerTasks);
 
-        // ── Parse and emit form fields from each specialist response ─────────────
-        // Strategy: try the MCP tool call first (when a live server is connected),
-        // then fall back to parsing the FORM_FIELDS block from the specialist's text.
-        // Currently the MCP client is dormant, so every call returns null and we
-        // always land on the text-extraction fallback — no behaviour change today.
+        // ── Form filling ─────────────────────────────────────────────────────────
+        // Safety (MCP-backed): conversational fill — discover the form's fields from
+        // the server, pre-fill what the AI can, then ask the user for any missing
+        // required field before submitting. Other domains: text extraction as before.
         var filledForms = new List<FilledForm>();
         foreach (var domain in selected.Where(k => results.ContainsKey(k)))
         {
-            FilledForm? form = null;
-
-            // 1. MCP tool call (only attempted when a live server is available)
-            if (_mcpClient.IsConnected)
+            if (domain.Equals("safety", StringComparison.OrdinalIgnoreCase) && _mcpClient.IsConnected)
             {
-                form = await _mcpClient.TryFillFormAsync(domain, userPrompt, cancellationToken);
+                await foreach (var evt in FillSafetyFormConversationallyAsync(
+                                   coordinator, userPrompt, results[domain], cancellationToken))
+                {
+                    if (evt.Form is not null) filledForms.Add(evt.Form);
+                    yield return evt;
+                }
             }
-
-            // 2. Structured text extraction fallback
-            form ??= FormSchemaRegistry.ParseFormFields(results[domain], domain);
-
-            if (form is not null)
+            else
             {
-                filledForms.Add(form);
-                yield return AgentEvent.FormFilledEvent(coordinator.Name, coordinator.Colour, form);
+                var form = FormSchemaRegistry.ParseFormFields(results[domain], domain);
+                if (form is not null)
+                {
+                    filledForms.Add(form);
+                    yield return AgentEvent.FormFilledEvent(coordinator.Name, coordinator.Colour, form);
+                }
             }
         }
 
@@ -254,6 +255,75 @@ public sealed class HybridPatternRunner : IPatternRunner
             $"Complete — {selected.Count} specialist(s) invoked, {skippedCount} skipped." +
             (filledForms.Count > 0 ? $" {filledForms.Count} form(s) pre-filled." : "") +
             " Classified → fan-out → synthesised.");
+    }
+
+    // ── Conversational safety form fill (MCP-backed) ─────────────────────────────
+    // Discovers the safety form's fields from the MCP server, lets the AI pre-fill
+    // what it can, then asks the user — one question at a time, using the form's own
+    // labels — for any required field that's still missing. Finally submits to MCP.
+    //
+    // Questions are strictly bounded by the form schema: the agent can only ask about
+    // fields that exist on the form and are still empty, so it cannot wander off-topic.
+
+    private async IAsyncEnumerable<AgentEvent> FillSafetyFormConversationallyAsync(
+        AssistAgent coordinator,
+        string userPrompt,
+        string safetyResponse,
+        [EnumeratorCancellation] CancellationToken ct)
+    {
+        yield return AgentEvent.SystemNote("Preparing the Safety Incident Report — checking what's needed...");
+
+        // 1. Discover the form's fields from the MCP server
+        var fields = await _mcpClient.GetFormFieldsAsync("safety", ct);
+        if (fields.Count == 0)
+        {
+            // MCP unavailable — fall back to text extraction from the specialist response
+            var fallback = FormSchemaRegistry.ParseFormFields(safetyResponse, "safety");
+            if (fallback is not null)
+                yield return AgentEvent.FormFilledEvent(coordinator.Name, coordinator.Colour, fallback);
+            yield break;
+        }
+
+        // 2. AI pre-fills whatever it can from the incident + specialist analysis
+        var analysis = FormSchemaRegistry.StripFormFields(safetyResponse);
+        var context  = $"INCIDENT:\n{userPrompt}\n\nSPECIALIST ANALYSIS:\n{analysis}";
+        var extracted = await _mcpClient.ExtractAnswersAsync("safety", fields, context, ct);
+        var answers   = new Dictionary<string, string>(extracted, StringComparer.OrdinalIgnoreCase);
+
+        // 3. Ask the user for each MISSING REQUIRED field — one at a time
+        var asked = 0;
+        foreach (var field in fields.Where(f => f.Required))
+        {
+            if (answers.TryGetValue(field.Id, out var have) && !string.IsNullOrWhiteSpace(have))
+                continue;   // already filled by the AI — don't ask
+
+            if (asked == 0)
+                yield return AgentEvent.SystemNote("I need a few more details to complete the form:");
+            asked++;
+
+            var conversationId = _store.Create();
+            yield return AgentEvent.FormQuestionEvent(
+                coordinator.Name, coordinator.Colour, field.Label, conversationId, field.Options);
+
+            // C# disallows yield inside catch — capture the error, yield after
+            string? answer = null, error = null;
+            try   { answer = await _store.WaitForResponseAsync(conversationId, ct); }
+            catch (OperationCanceledException) { error = "Session timed out waiting for your response."; }
+
+            if (error is not null) { yield return AgentEvent.Error(error); yield break; }
+
+            answers[field.Id] = answer!.Trim();
+        }
+
+        yield return AgentEvent.SystemNote(
+            asked > 0
+                ? "Thanks — I have everything I need. Submitting the report..."
+                : "All fields filled from the incident — submitting the report...");
+
+        // 4. Submit to the MCP server and emit the completed form
+        var form = await _mcpClient.SubmitFormAsync("safety", answers, ct);
+        if (form is not null)
+            yield return AgentEvent.FormFilledEvent(coordinator.Name, coordinator.Colour, form);
     }
 
     // ── Scope guard — keyword-based, no LLM call ─────────────────────────────

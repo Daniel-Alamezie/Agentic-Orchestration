@@ -14,20 +14,19 @@ namespace Core.Infrastructure.Mcp;
 /// <summary>
 /// Live MCP client that connects to the Safety MCP server over stdio.
 ///
-/// Flow per incident:
-///   1. Spawn the MCPServer subprocess via StdioClientTransport
-///   2. StartNewIncident        → obtain a session ID
-///   3. GetTotalPages           → know how many pages to fill
-///   4. For each page:
-///        GetPageComponents     → discover what fields the server wants
-///        [AI extraction]       → ask the LLM to fill those fields from the incident context
-///        UpdateIncidentPage    → submit the answers back to the server (validates required fields)
-///   5. CompleteIncident        → seal the session
-///   6. Return a FilledForm     → rendered in the UI Forms tab
+/// The form fill is split into three steps so the runner can pause between them
+/// to ask the user for missing details (a conversational, form-driven flow):
 ///
-/// Only the "safety" domain is handled here. Any other domain returns null,
-/// causing HybridPatternRunner to fall back to structured text extraction.
-/// Any exception during the MCP flow also returns null (safe degradation).
+///   GetFormFieldsAsync  — connect → get_total_pages → get_page_components per page
+///                         → return the field definitions discovered from the server.
+///   ExtractAnswersAsync — ask the LLM to pre-fill what it can from the incident text.
+///   SubmitFormAsync     — connect → start_new_incident → update_incident_page per page
+///                         → complete_incident → return the finished FilledForm.
+///
+/// Each step opens its own short-lived connection (the server keeps incident state
+/// in-memory per process, so a single submission connection does start→fill→complete
+/// in one go). Only the "safety" domain is handled; other domains return empty/null
+/// so the runner falls back to structured text extraction.
 /// </summary>
 public sealed class LiveMcpFormClient : IMcpFormClient
 {
@@ -36,7 +35,7 @@ public sealed class LiveMcpFormClient : IMcpFormClient
     private readonly string                     _serverPath;
 
     /// <inheritdoc/>
-    /// Always true — connection is attempted on each call and failures degrade gracefully.
+    /// Always true — connections are attempted per call and failures degrade gracefully.
     public bool IsConnected => true;
 
     /// <inheritdoc/>
@@ -52,216 +51,243 @@ public sealed class LiveMcpFormClient : IMcpFormClient
         _serverPath = configuration["Mcp:SafetyServerPath"] ?? "../MCPServer";
     }
 
+    private static bool IsSafety(string domain) =>
+        domain.Equals("safety", StringComparison.OrdinalIgnoreCase);
+
+    // ── Step 1: Discover the form's fields ─────────────────────────────────────
+
     /// <inheritdoc/>
-    public async Task<FilledForm?> TryFillFormAsync(
-        string domain,
-        string incidentContext,
-        CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<McpFormField>> GetFormFieldsAsync(
+        string domain, CancellationToken cancellationToken = default)
     {
-        // Only safety is covered by the live server at this stage
-        if (!domain.Equals("safety", StringComparison.OrdinalIgnoreCase))
+        if (!IsSafety(domain))
         {
-            _logger.LogDebug("[MCP] Domain '{Domain}' not yet supported by live client — falling back to text extraction", domain);
-            return null;
+            _logger.LogDebug("[MCP] Domain '{Domain}' not MCP-backed — caller falls back", domain);
+            return [];
         }
 
         try
         {
-            return await FillSafetyFormAsync(incidentContext, cancellationToken);
+            return await WithClientAsync(async (client, tool) =>
+            {
+                var pagesResult = await client.CallToolAsync(
+                    tool("GetTotalPages"), new Dictionary<string, object?>(),
+                    cancellationToken: cancellationToken);
+                var totalPages = int.TryParse(GetText(pagesResult)?.Trim(), out var n) ? n : 2;
+                _logger.LogInformation("[MCP] Form has {Total} page(s)", totalPages);
+
+                var fields = new List<McpFormField>();
+                for (var page = 1; page <= totalPages; page++)
+                {
+                    var componentsResult = await client.CallToolAsync(
+                        tool("GetPageComponents"),
+                        new Dictionary<string, object?> { ["pageNumber"] = page },
+                        cancellationToken: cancellationToken);
+
+                    var json = GetText(componentsResult) ?? "{}";
+                    _logger.LogDebug("[MCP] Page {Page} raw components JSON: {Json}", page, json);
+
+                    var pageFields = ParseFieldsFromComponentJson(json, page);
+                    if (pageFields.Count == 0)
+                    {
+                        _logger.LogWarning(
+                            "[MCP] No fields parsed for page {Page} — using known safety schema", page);
+                        pageFields = KnownSafetyFields(page);
+                    }
+                    fields.AddRange(pageFields);
+                }
+
+                _logger.LogInformation(
+                    "[MCP] Discovered {Count} field(s): {Names}",
+                    fields.Count, string.Join(", ", fields.Select(f => f.Id)));
+                return (IReadOnlyList<McpFormField>)fields;
+            }, cancellationToken);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "[MCP] Live safety MCP call failed — falling back to text extraction");
-            return null;
+            _logger.LogWarning(ex, "[MCP] GetFormFieldsAsync failed — caller will fall back");
+            return [];
         }
     }
 
-    // ── Main flow ─────────────────────────────────────────────────────────────
+    // ── Step 2: AI pre-fill ────────────────────────────────────────────────────
 
-    private async Task<FilledForm?> FillSafetyFormAsync(
-        string incidentContext, CancellationToken ct)
+    /// <inheritdoc/>
+    public async Task<IReadOnlyDictionary<string, string>> ExtractAnswersAsync(
+        string domain,
+        IReadOnlyList<McpFormField> fields,
+        string context,
+        CancellationToken cancellationToken = default)
     {
-        // Spawn the MCPServer process and connect via stdio
+        if (!IsSafety(domain) || fields.Count == 0)
+            return new Dictionary<string, string>();
+
+        try
+        {
+            var history = new ChatHistory();
+            history.AddSystemMessage(
+                "You are a form-filling assistant. " +
+                "Extract values strictly from the incident description — do not invent information. " +
+                "For selection fields, pick exactly one of the listed options. " +
+                "If a value genuinely cannot be determined, omit that line entirely.");
+            history.AddUserMessage(BuildExtractionPrompt(fields, context));
+
+            var response = await _chat.GetChatMessageContentAsync(history, cancellationToken: cancellationToken);
+            var answers  = ParseKeyValuePairs(response.Content ?? "", fields);
+
+            _logger.LogInformation(
+                "[MCP] AI pre-filled {Filled}/{Total} field(s)", answers.Count, fields.Count);
+            return answers;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[MCP] ExtractAnswersAsync failed — no values pre-filled");
+            return new Dictionary<string, string>();
+        }
+    }
+
+    // ── Step 3: Submit the completed answers ───────────────────────────────────
+
+    /// <inheritdoc/>
+    public async Task<FilledForm?> SubmitFormAsync(
+        string domain,
+        IReadOnlyDictionary<string, string> answers,
+        CancellationToken cancellationToken = default)
+    {
+        if (!IsSafety(domain)) return null;
+
+        // Build the UI form from the gathered answers up front, so the user's input
+        // is preserved even if the server round-trip fails.
+        var form = BuildFilledForm(answers);
+
+        try
+        {
+            await WithClientAsync(async (client, tool) =>
+            {
+                var startResult = await client.CallToolAsync(
+                    tool("StartNewIncident"), new Dictionary<string, object?>(),
+                    cancellationToken: cancellationToken);
+
+                var incidentId = ExtractIncidentId(startResult);
+                if (string.IsNullOrEmpty(incidentId))
+                {
+                    _logger.LogWarning("[MCP] Could not start incident on submit — UI form still built locally");
+                    return false;
+                }
+                _logger.LogInformation("[MCP] Submitting incident {Id}", incidentId);
+
+                // Submit page by page, using the known safety schema for page grouping
+                for (var page = 1; page <= 2; page++)
+                {
+                    var pageAnswers = new Dictionary<string, string>();
+                    foreach (var field in KnownSafetyFields(page))
+                        if (answers.TryGetValue(field.Id, out var v) && !string.IsNullOrWhiteSpace(v))
+                            pageAnswers[field.Id] = v;
+
+                    var updateResult = await client.CallToolAsync(
+                        tool("UpdateIncidentPage"),
+                        new Dictionary<string, object?>
+                        {
+                            ["incidentId"] = incidentId,
+                            ["pageNumber"] = page,
+                            ["answers"]    = pageAnswers
+                        },
+                        cancellationToken: cancellationToken);
+
+                    var ok = string.Equals(GetText(updateResult)?.Trim(), "true", StringComparison.OrdinalIgnoreCase);
+                    _logger.LogInformation("[MCP] Page {Page} submitted — server accepted: {Ok}", page, ok);
+                }
+
+                await client.CallToolAsync(
+                    tool("CompleteIncident"),
+                    new Dictionary<string, object?> { ["incidentId"] = incidentId },
+                    cancellationToken: cancellationToken);
+                _logger.LogInformation("[MCP] Incident {Id} completed on server", incidentId);
+                return true;
+            }, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[MCP] SubmitFormAsync server call failed — returning locally-built form");
+        }
+
+        return form;
+    }
+
+    // ── Connection helper ──────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Spawns the MCP server, connects over stdio, resolves the registered tool
+    /// names (the SDK renames methods to snake_case), runs <paramref name="action"/>,
+    /// then disposes the connection. The action receives the client and a tool-name
+    /// resolver that maps our PascalCase names to whatever the server registered.
+    /// </summary>
+    private async Task<T> WithClientAsync<T>(
+        Func<McpClient, Func<string, string>, Task<T>> action,
+        CancellationToken ct)
+    {
         var transport = new StdioClientTransport(new StdioClientTransportOptions
         {
             Name      = "SafetyMcpServer",
             Command   = "dotnet",
-            // --no-build: MCPServer is pre-built by Web.csproj's BuildMcpServer target
-            // before every Web build, so the binary is always up to date.
+            // --no-build: MCPServer is pre-built by Web.csproj's BuildMcpServer target.
             Arguments = ["run", "--project", _serverPath, "--no-build"]
         });
 
         _logger.LogInformation("[MCP] Spawning Safety MCP server from '{Path}'", _serverPath);
-
         await using var client = await McpClient.CreateAsync(transport, cancellationToken: ct);
         _logger.LogInformation("[MCP] Connected to Safety MCP server");
 
-        // ── Discover what tool names the server actually registered ───────────
-        // The SDK converts PascalCase method names to snake_case (e.g. StartNewIncident
-        // → start_new_incident). We normalise both sides of the lookup by stripping
-        // underscores and lowercasing, so our PascalCase names resolve correctly
-        // regardless of whatever separator convention the server uses.
         var registeredTools = await client.ListToolsAsync(cancellationToken: ct);
-
-        static string Normalise(string name) =>
-            name.Replace("_", "").Replace("-", "").ToLowerInvariant();
-
-        var toolNames = registeredTools.ToDictionary(
-            t => Normalise(t.Name),   // key: normalised form
-            t => t.Name);             // value: actual registered name
-
-        _logger.LogInformation("[MCP] Server registered {Count} tool(s): {Names}",
+        var toolNames = registeredTools.ToDictionary(t => Normalise(t.Name), t => t.Name);
+        _logger.LogInformation(
+            "[MCP] Server registered {Count} tool(s): {Names}",
             toolNames.Count, string.Join(", ", registeredTools.Select(t => t.Name)));
 
-        // Resolves our PascalCase name to whatever the server actually registered
         string Tool(string name) =>
             toolNames.TryGetValue(Normalise(name), out var actual) ? actual : name;
 
-        // ── Step 1: Start a new session ───────────────────────────────────────
-        var startResult = await client.CallToolAsync(
-            Tool("StartNewIncident"),
-            new Dictionary<string, object?>(),
-            cancellationToken: ct);
-
-        var incidentId = ExtractIncidentId(startResult);
-        if (string.IsNullOrEmpty(incidentId))
-        {
-            _logger.LogWarning("[MCP] Could not extract incidentId from StartNewIncident response");
-            return null;
-        }
-        _logger.LogInformation("[MCP] Session started — incidentId: {Id}", incidentId);
-
-        // ── Step 2: How many pages does the form have? ────────────────────────
-        var pagesResult  = await client.CallToolAsync(Tool("GetTotalPages"), new Dictionary<string, object?>(), cancellationToken: ct);
-        var totalPages   = int.TryParse(GetText(pagesResult)?.Trim(), out var n) ? n : 2;
-        _logger.LogInformation("[MCP] Form has {Total} page(s)", totalPages);
-
-        // ── Step 3: Fill each page ────────────────────────────────────────────
-        var allAnswers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
-        for (var page = 1; page <= totalPages; page++)
-        {
-            _logger.LogInformation("[MCP] Processing page {Page}/{Total}", page, totalPages);
-
-            // Ask the server what fields this page contains
-            var componentsResult = await client.CallToolAsync(
-                Tool("GetPageComponents"),
-                new Dictionary<string, object?> { ["pageNumber"] = page },
-                cancellationToken: ct);
-
-            var componentJson = GetText(componentsResult) ?? "{}";
-            _logger.LogDebug("[MCP] Page {Page} raw components JSON: {Json}", page, componentJson);
-
-            var fields = ParseFieldsFromComponentJson(componentJson);
-            if (fields.Count == 0)
-            {
-                _logger.LogWarning(
-                    "[MCP] No fields parsed for page {Page} from server — using known safety schema as fallback",
-                    page);
-                fields = KnownSafetyFields(page);
-            }
-
-            _logger.LogDebug("[MCP] Page {Page} fields: {Fields}",
-                page, string.Join(", ", fields.Select(f => f.Name)));
-
-            // Use the LLM to extract values for those fields from the incident description
-            var answers = await AiExtractFieldValuesAsync(fields, incidentContext, ct);
-
-            // All 8 fields across both pages are Required on the server side.
-            // Guard against the AI missing any by falling back to a safe default.
-            foreach (var field in fields.Where(f => f.Required))
-            {
-                if (!answers.TryGetValue(field.Name, out var v) || string.IsNullOrWhiteSpace(v))
-                {
-                    answers[field.Name] = field.Options?.FirstOrDefault() ?? "Unknown";
-                    _logger.LogDebug("[MCP] Required field '{Field}' not extracted — using default", field.Name);
-                }
-            }
-
-            // Submit the page back to the MCP server
-            var updateResult = await client.CallToolAsync(
-                Tool("UpdateIncidentPage"),
-                new Dictionary<string, object?>
-                {
-                    ["incidentId"] = incidentId,
-                    ["pageNumber"] = page,
-                    ["answers"]    = answers
-                },
-                cancellationToken: ct);
-
-            var ok = string.Equals(GetText(updateResult)?.Trim(), "true", StringComparison.OrdinalIgnoreCase);
-            _logger.LogInformation("[MCP] Page {Page} submitted — server accepted: {Ok}", page, ok);
-
-            foreach (var kv in answers)
-                allAnswers[kv.Key] = kv.Value;
-        }
-
-        // ── Step 4: Seal the incident on the server ───────────────────────────
-        await client.CallToolAsync(
-            Tool("CompleteIncident"),
-            new Dictionary<string, object?> { ["incidentId"] = incidentId },
-            cancellationToken: ct);
-        _logger.LogInformation("[MCP] Incident {Id} completed on server", incidentId);
-
-        // ── Step 5: Build the FilledForm the UI will render ───────────────────
-        return BuildFilledForm(allAnswers);
+        return await action(client, Tool);
     }
 
-    // ── AI extraction ─────────────────────────────────────────────────────────
+    private static string Normalise(string name) =>
+        name.Replace("_", "").Replace("-", "").ToLowerInvariant();
 
-    private async Task<Dictionary<string, string>> AiExtractFieldValuesAsync(
-        List<FieldDef> fields, string incidentContext, CancellationToken ct)
-    {
-        var prompt = BuildExtractionPrompt(fields, incidentContext);
-
-        var history = new ChatHistory();
-        history.AddSystemMessage(
-            "You are a form-filling assistant. " +
-            "Extract values strictly from the incident description — do not invent information. " +
-            "For selection fields, pick exactly one of the listed options.");
-        history.AddUserMessage(prompt);
-
-        var response = await _chat.GetChatMessageContentAsync(history, cancellationToken: ct);
-        return ParseKeyValuePairs(response.Content ?? "", fields);
-    }
+    // ── AI extraction helpers ──────────────────────────────────────────────────
 
     /// <summary>
-    /// Builds a prompt that lists each field with its type and options,
-    /// then asks the model to return "FieldName: value" pairs.
-    /// Uses the same pattern as our proven FORM_FIELDS extraction so the
-    /// parser doesn't need anything new.
+    /// Builds a prompt that lists each field with its type and options, then asks
+    /// the model to return "FieldName: value" pairs (the proven FORM_FIELDS shape).
     /// </summary>
-    private static string BuildExtractionPrompt(List<FieldDef> fields, string incidentContext)
+    private static string BuildExtractionPrompt(IReadOnlyList<McpFormField> fields, string context)
     {
         var sb = new StringBuilder();
         sb.AppendLine("Extract values for each field below from the incident description.");
         sb.AppendLine("Write your answers as FieldName: value, one per line.");
         sb.AppendLine("For selection fields choose EXACTLY one of the listed options.");
-        sb.AppendLine("If a value cannot be determined write: Unknown");
+        sb.AppendLine("If a value cannot be determined, omit that line completely.");
         sb.AppendLine();
-        sb.AppendLine("INCIDENT:");
-        sb.AppendLine(incidentContext);
+        sb.AppendLine(context);
         sb.AppendLine();
         sb.AppendLine("FORM_FIELDS:");
         foreach (var f in fields)
         {
-            if (f.Options?.Length > 0)
-                sb.AppendLine($"{f.Name}: (choose one: {string.Join(" | ", f.Options)})");
+            if (f.IsChoice)
+                sb.AppendLine($"{f.Id}: (choose one: {string.Join(" | ", f.Options!)})");
             else
-                sb.AppendLine($"{f.Name}:");
+                sb.AppendLine($"{f.Id}:");
         }
         return sb.ToString();
     }
 
     /// <summary>
-    /// Parses "FieldName: value" pairs from the AI's response.
-    /// Only accepts keys that appear in the known field set.
-    /// Strips parenthetical notes the model sometimes appends.
+    /// Parses "FieldName: value" pairs from the AI's response. Only accepts known
+    /// field ids; strips parenthetical notes and placeholder/"unknown" values.
     /// </summary>
     private static Dictionary<string, string> ParseKeyValuePairs(
-        string response, List<FieldDef> fields)
+        string response, IReadOnlyList<McpFormField> fields)
     {
-        var known  = new HashSet<string>(fields.Select(f => f.Name), StringComparer.OrdinalIgnoreCase);
+        var known  = new HashSet<string>(fields.Select(f => f.Id), StringComparer.OrdinalIgnoreCase);
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var line in response.Split('\n'))
@@ -271,7 +297,6 @@ public sealed class LiveMcpFormClient : IMcpFormClient
 
             var key = line[..colon].Trim();
             var val = line[(colon + 1)..].Trim();
-
             if (!known.Contains(key) || string.IsNullOrWhiteSpace(val)) continue;
 
             // Strip parenthetical explanations: "Slip/Trip/Fall (because...)" → "Slip/Trip/Fall"
@@ -279,28 +304,35 @@ public sealed class LiveMcpFormClient : IMcpFormClient
             if (paren > 0) val = val[..paren].Trim();
             val = val.TrimEnd('.', ',', ';');
 
-            if (!string.IsNullOrWhiteSpace(val))
+            if (!string.IsNullOrWhiteSpace(val) && !IsEmptyValue(val))
                 result[key] = val;
         }
 
         return result;
     }
 
-    // ── Component JSON parsing ────────────────────────────────────────────────
+    private static bool IsEmptyValue(string v) =>
+        v.Equals("unknown",       StringComparison.OrdinalIgnoreCase) ||
+        v.Equals("n/a",           StringComparison.OrdinalIgnoreCase) ||
+        v.Equals("not specified", StringComparison.OrdinalIgnoreCase) ||
+        v.Equals("not mentioned", StringComparison.OrdinalIgnoreCase) ||
+        v.Equals("none",          StringComparison.OrdinalIgnoreCase) ||
+        v.StartsWith("[",         StringComparison.OrdinalIgnoreCase);
+
+    // ── Component JSON parsing ─────────────────────────────────────────────────
 
     /// <summary>
-    /// Recursively walks the component JSON returned by GetPageComponents and
-    /// extracts field definitions. Property matching is case-insensitive so it
-    /// works whether the MCP SDK serialises as camelCase (fieldName) or
-    /// PascalCase (FieldName).
+    /// Walks the component JSON from GetPageComponents and extracts field
+    /// definitions. Property matching is case-insensitive so it works whether the
+    /// MCP SDK serialises camelCase (fieldName) or PascalCase (FieldName).
     /// </summary>
-    private static List<FieldDef> ParseFieldsFromComponentJson(string json)
+    private static List<McpFormField> ParseFieldsFromComponentJson(string json, int page)
     {
-        var fields = new List<FieldDef>();
+        var fields = new List<McpFormField>();
         try
         {
             using var doc = JsonDocument.Parse(json);
-            WalkComponentElement(doc.RootElement, fields);
+            WalkComponentElement(doc.RootElement, fields, page);
         }
         catch (JsonException)
         {
@@ -309,11 +341,10 @@ public sealed class LiveMcpFormClient : IMcpFormClient
         return fields;
     }
 
-    private static void WalkComponentElement(JsonElement el, List<FieldDef> fields)
+    private static void WalkComponentElement(JsonElement el, List<McpFormField> fields, int page)
     {
         if (el.ValueKind != JsonValueKind.Object) return;
 
-        // A form input element has a FieldName property
         if (TryGetProp(el, "FieldName", out var fieldNameEl) &&
             fieldNameEl.ValueKind == JsonValueKind.String)
         {
@@ -335,20 +366,31 @@ public sealed class LiveMcpFormClient : IMcpFormClient
                     .Select(o => o.GetString() ?? "")
                     .Where(s => !string.IsNullOrWhiteSpace(s))
                     .ToArray();
+                if (options.Length == 0) options = null;
             }
 
             if (!string.IsNullOrEmpty(name))
-                fields.Add(new FieldDef(name, label, type, options, required));
+                fields.Add(new McpFormField(page, name, label, NormaliseType(type, options), options, required));
         }
 
-        // Recurse into nested component arrays (Components / components)
         if (TryGetProp(el, "Components", out var compsEl) &&
             compsEl.ValueKind == JsonValueKind.Array)
         {
             foreach (var child in compsEl.EnumerateArray())
-                WalkComponentElement(child, fields);
+                WalkComponentElement(child, fields, page);
         }
     }
+
+    /// <summary>Maps the server's component type name to a UI field type.</summary>
+    private static string NormaliseType(string serverType, string[]? options) =>
+        serverType.ToLowerInvariant() switch
+        {
+            "radiobuttongroup"          => "radio",
+            "datetimepicker"            => "date",
+            "textareainput"             => "textarea",
+            _ when options is { Length: > 0 } => "radio",
+            _                           => "text"
+        };
 
     /// <summary>
     /// Case- and underscore-insensitive property lookup, so "FieldName",
@@ -359,12 +401,10 @@ public sealed class LiveMcpFormClient : IMcpFormClient
         value = default;
         if (obj.ValueKind != JsonValueKind.Object) return false;
 
-        static string Norm(string s) => s.Replace("_", "").ToLowerInvariant();
-        var target = Norm(name);
-
+        var target = Normalise(name);
         foreach (var prop in obj.EnumerateObject())
         {
-            if (Norm(prop.Name) == target)
+            if (Normalise(prop.Name) == target)
             {
                 value = prop.Value;
                 return true;
@@ -375,20 +415,20 @@ public sealed class LiveMcpFormClient : IMcpFormClient
 
     /// <summary>
     /// Fallback field definitions for the safety form, used when the server's
-    /// component JSON cannot be parsed (e.g. polymorphic serialisation strips
-    /// the nested fields). Mirrors the MCPServer's PageDefinitions exactly so
-    /// update_incident_page still receives the field names it expects.
+    /// component JSON can't be parsed. Mirrors the MCPServer's PageDefinitions so
+    /// update_incident_page still receives the field names it expects, and the
+    /// labels match the server's question text.
     /// </summary>
-    private static List<FieldDef> KnownSafetyFields(int page) => page switch
+    private static List<McpFormField> KnownSafetyFields(int page) => page switch
     {
         1 =>
         [
-            new("IncidentDate",     "When did the incident occur?", "date",  null, true),
-            new("IncidentLocation", "Where did the incident occur?", "text", null, true),
-            new("IncidentType",     "What type of incident was it?", "radio",
+            new(1, "IncidentDate",     "When did the incident occur?",      "date",  null, true),
+            new(1, "IncidentLocation", "Where did the incident occur?",     "text",  null, true),
+            new(1, "IncidentType",     "What type of incident was it?",     "radio",
                 ["Slip/Trip/Fall", "Equipment Failure", "Chemical Spill",
                  "Fire/Explosion", "Electrical", "Vehicle Accident", "Other"], true),
-            new("SeverityLevel",    "What is the severity level?", "radio",
+            new(1, "SeverityLevel",    "What is the severity level of the incident?", "radio",
                 ["Minor (No injury, minimal damage)",
                  "Moderate (First aid required, some damage)",
                  "Serious (Medical attention required, significant damage)",
@@ -396,26 +436,26 @@ public sealed class LiveMcpFormClient : IMcpFormClient
         ],
         2 =>
         [
-            new("PersonsInvolved",       "Who was involved or witnessed?", "textarea", null, true),
-            new("InjuriesReported",      "Were there any injuries?",       "textarea", null, true),
-            new("IncidentDescription",   "Describe what happened.",        "textarea", null, true),
-            new("ImmediateActionsTaken", "What immediate actions were taken?", "textarea", null, true),
+            new(2, "PersonsInvolved",       "Who was involved in or witnessed the incident?", "textarea", null, true),
+            new(2, "InjuriesReported",      "Were there any injuries reported? If yes, please describe.", "textarea", null, true),
+            new(2, "IncidentDescription",   "Please provide a detailed description of what happened.", "textarea", null, true),
+            new(2, "ImmediateActionsTaken", "What immediate actions were taken following the incident?", "textarea", null, true),
         ],
         _ => []
     };
 
-    // ── FilledForm construction ───────────────────────────────────────────────
+    // ── FilledForm construction ────────────────────────────────────────────────
 
     /// <summary>
-    /// Maps the collected answers (keyed by MCP server field names) into a
-    /// FilledForm that the UI Forms tab knows how to render.
-    /// Field names and options mirror the MCPServer's PageDefinitions exactly.
+    /// Maps the collected answers (keyed by MCP field names) into a FilledForm the
+    /// UI Forms tab renders. Uses polished display labels; field ids and options
+    /// mirror the MCPServer's PageDefinitions exactly.
     /// </summary>
-    private static FilledForm BuildFilledForm(Dictionary<string, string> answers)
+    private static FilledForm BuildFilledForm(IReadOnlyDictionary<string, string> answers)
     {
         static FilledFormField MakeField(
             string id, string label, string type,
-            string[]? options, Dictionary<string, string> answers)
+            string[]? options, IReadOnlyDictionary<string, string> answers)
         {
             var hasValue = answers.TryGetValue(id, out var v) && !string.IsNullOrEmpty(v);
             return new FilledFormField
@@ -459,17 +499,17 @@ public sealed class LiveMcpFormClient : IMcpFormClient
                     Title  = "Incident Details and Actions",
                     Fields =
                     [
-                        MakeField("PersonsInvolved",       "Persons Involved",          "textarea", null, answers),
-                        MakeField("InjuriesReported",      "Injuries Reported",         "textarea", null, answers),
-                        MakeField("IncidentDescription",   "Incident Description",      "textarea", null, answers),
-                        MakeField("ImmediateActionsTaken", "Immediate Actions Taken",   "textarea", null, answers),
+                        MakeField("PersonsInvolved",       "Persons Involved",        "textarea", null, answers),
+                        MakeField("InjuriesReported",      "Injuries Reported",       "textarea", null, answers),
+                        MakeField("IncidentDescription",   "Incident Description",    "textarea", null, answers),
+                        MakeField("ImmediateActionsTaken", "Immediate Actions Taken", "textarea", null, answers),
                     ]
                 }
             ]
         };
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    // ── Tool-result helpers ────────────────────────────────────────────────────
 
     /// <summary>Returns the first text-type content block from a tool result.</summary>
     private static string? GetText(CallToolResult result) =>
@@ -477,13 +517,11 @@ public sealed class LiveMcpFormClient : IMcpFormClient
 
     /// <summary>
     /// Parses the incidentId from a tool result. The server returns the full
-    /// SafetyIncident object, which the MCP SDK exposes both as a JSON text block
-    /// AND in StructuredContent. The SDK serialises property names in camelCase
-    /// (incidentId), so we match the property case-insensitively.
+    /// SafetyIncident object both as a JSON text block and in StructuredContent,
+    /// with camelCase property names — matched case-insensitively.
     /// </summary>
     private static string? ExtractIncidentId(CallToolResult result)
     {
-        // Prefer the SDK's structured output if present, else fall back to the text block
         if (result.StructuredContent is JsonElement structured &&
             TryFindStringProperty(structured, "incidentId", out var fromStructured))
             return fromStructured;
@@ -501,21 +539,15 @@ public sealed class LiveMcpFormClient : IMcpFormClient
         return null;
     }
 
-    /// <summary>
-    /// Finds a string property by name, ignoring case and underscores
-    /// (so "incidentId", "IncidentId", and "incident_id" all match).
-    /// </summary>
     private static bool TryFindStringProperty(JsonElement obj, string name, out string? value)
     {
         value = null;
         if (obj.ValueKind != JsonValueKind.Object) return false;
 
-        static string Norm(string s) => s.Replace("_", "").ToLowerInvariant();
-        var target = Norm(name);
-
+        var target = Normalise(name);
         foreach (var prop in obj.EnumerateObject())
         {
-            if (Norm(prop.Name) == target && prop.Value.ValueKind == JsonValueKind.String)
+            if (Normalise(prop.Name) == target && prop.Value.ValueKind == JsonValueKind.String)
             {
                 value = prop.Value.GetString();
                 return !string.IsNullOrEmpty(value);
@@ -523,13 +555,4 @@ public sealed class LiveMcpFormClient : IMcpFormClient
         }
         return false;
     }
-
-    // ── Internal model ────────────────────────────────────────────────────────
-
-    private sealed record FieldDef(
-        string    Name,
-        string    Label,
-        string    Type,
-        string[]? Options,
-        bool      Required);
 }
