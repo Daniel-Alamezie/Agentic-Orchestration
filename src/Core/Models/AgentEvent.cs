@@ -14,7 +14,9 @@ public record AgentEvent(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     FilledForm?         Form = null,             // FormFilled event only
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    string[]?           Options = null           // FormQuestion (choice fields) only
+    string[]?           Options = null,          // FormQuestion (choice fields) only
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string?             Suggestion = null        // FormQuestion — the AI's suggested choice
 )
 {
     public static AgentEvent SystemNote(string content) =>
@@ -40,15 +42,17 @@ public record AgentEvent(
             DateTimeOffset.UtcNow, conversationId);
 
     /// <summary>
-    /// A form-driven question: asks the user to fill one missing required field.
+    /// A form-driven question: asks the user to fill one form field.
     /// The question text is the form field's own label. When <paramref name="options"/>
-    /// is supplied (choice field), the UI shows them as selectable buttons; otherwise
-    /// it shows a free-text input. The user's reply comes back via the ConversationId.
+    /// is supplied (choice field), the UI shows them as selectable buttons — and
+    /// highlights <paramref name="suggestion"/> as the AI's suggested choice if given;
+    /// otherwise it shows a free-text input. The reply comes back via the ConversationId.
     /// </summary>
     public static AgentEvent FormQuestionEvent(
-        string agentName, string colour, string question, string conversationId, string[]? options) =>
+        string agentName, string colour, string question, string conversationId,
+        string[]? options, string? suggestion = null) =>
         new(agentName, colour, question, AgentEventType.FormQuestion,
-            DateTimeOffset.UtcNow, conversationId, Options: options);
+            DateTimeOffset.UtcNow, conversationId, Options: options, Suggestion: suggestion);
 
     public static AgentEvent Aggregate(string content) =>
         new("Coordinator", "#8b5cf6", content, AgentEventType.AggregatedResult, DateTimeOffset.UtcNow);

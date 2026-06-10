@@ -812,19 +812,23 @@
           document.getElementById(`thinker-${sid(agentName)}`)?.remove();
           pendingConvId = conversationId;
           const opts = evt.options || [];
+          const suggestion = evt.suggestion || null;
           currentFormOptions = opts;
 
-          // Choice fields → clickable option buttons; text fields → bottom input bar
+          // Choice fields → clickable option buttons (AI's guess highlighted);
+          // text fields → bottom input bar.
           const optionsHtml = opts.length
             ? `<div class="flex flex-wrap gap-2 mt-3">
-                 ${opts.map((o, i) => `
+                 ${opts.map((o, i) => {
+                   const isSug = suggestion && o === suggestion;
+                   return `
                    <button onclick="sendAnswer(currentFormOptions[${i}])"
-                     class="px-3 py-2 text-sm rounded-xl text-left transition-colors"
-                     style="background:rgba(240,108,0,0.12);border:1.5px solid rgba(240,108,0,0.4);color:#FFD7B0"
-                     onmouseover="this.style.background='rgba(240,108,0,0.25)'"
-                     onmouseout ="this.style.background='rgba(240,108,0,0.12)'">
-                     ${esc(o)}
-                   </button>`).join('')}
+                     class="px-3 py-2 text-sm rounded-xl text-left transition-opacity hover:opacity-80"
+                     style="background:${isSug ? 'rgba(240,108,0,0.30)' : 'rgba(240,108,0,0.12)'};
+                            border:1.5px solid ${isSug ? '#F06C00' : 'rgba(240,108,0,0.4)'};color:#FFD7B0">
+                     ${esc(o)}${isSug ? ' <span class="opacity-70 text-[10px] font-semibold">· AI suggests</span>' : ''}
+                   </button>`;
+                 }).join('')}
                </div>`
             : '';
 

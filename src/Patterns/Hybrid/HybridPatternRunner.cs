@@ -290,20 +290,28 @@ public sealed class HybridPatternRunner : IPatternRunner
         var extracted = await _mcpClient.ExtractAnswersAsync("safety", fields, context, ct);
         var answers   = new Dictionary<string, string>(extracted, StringComparer.OrdinalIgnoreCase);
 
-        // 3. Ask the user for each MISSING REQUIRED field — one at a time
+        // 3. Ask the user for the required fields — one at a time
+        //    • Text fields: only ask if the AI couldn't fill them.
+        //    • Choice fields: ALWAYS ask so the user picks/confirms from the options
+        //      (the AI's guess, if any, is passed through as a highlighted suggestion).
         var asked = 0;
         foreach (var field in fields.Where(f => f.Required))
         {
-            if (answers.TryGetValue(field.Id, out var have) && !string.IsNullOrWhiteSpace(have))
-                continue;   // already filled by the AI — don't ask
+            var aiValue = answers.TryGetValue(field.Id, out var have) && !string.IsNullOrWhiteSpace(have)
+                ? have
+                : null;
+
+            if (!field.IsChoice && aiValue is not null)
+                continue;   // text field already filled by the AI — don't ask
 
             if (asked == 0)
-                yield return AgentEvent.SystemNote("I need a few more details to complete the form:");
+                yield return AgentEvent.SystemNote("I need a few details to complete the form:");
             asked++;
 
             var conversationId = _store.Create();
             yield return AgentEvent.FormQuestionEvent(
-                coordinator.Name, coordinator.Colour, field.Label, conversationId, field.Options);
+                coordinator.Name, coordinator.Colour, field.Label, conversationId,
+                field.Options, field.IsChoice ? aiValue : null);
 
             // C# disallows yield inside catch — capture the error, yield after
             string? answer = null, error = null;
